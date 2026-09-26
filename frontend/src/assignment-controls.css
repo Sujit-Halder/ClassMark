@@ -1,0 +1,77 @@
+.assignment-heading-actions {
+  display: grid;
+  flex: none;
+  gap: 10px;
+  justify-items: end;
+}
+
+.assignment-tools {
+  display: flex;
+  gap: 7px;
+}
+
+.assignment-tools button {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+  padding: 7px 10px;
+}
+
+.assignment-tools svg {
+  height: 15px;
+  width: 15px;
+}
+
+.edit-assignment-form {
+  background: #f8faf9;
+  border: 1px solid #e0e7e3;
+  border-radius: 12px;
+  margin: 16px 0;
+  max-width: none;
+  padding: 18px;
+}
+
+.edit-assignment-form > small {
+  color: #737f79;
+  display: block;
+  margin-top: 8px;
+}
+
+.classroom-edit-form {
+  margin: 18px 0;
+  max-width: none;
+}
+
+.deadline-closed {
+  align-items: flex-start;
+  background: #fff6ed;
+  border: 1px solid #f0d5b9;
+  border-radius: 10px;
+  color: #8a5428;
+  display: flex;
+  gap: 11px;
+  margin-top: 14px;
+  padding: 13px;
+}
+
+.deadline-closed > svg {
+  flex: none;
+  height: 19px;
+  width: 19px;
+}
+
+.deadline-closed p {
+  color: #8a684b;
+  margin: 3px 0 !important;
+}
+
+@media (max-width: 600px) {
+  .assignment-main > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .assignment-heading-actions {
+    justify-items: start;
+  }
+}

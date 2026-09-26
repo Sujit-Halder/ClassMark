@@ -1,0 +1,23 @@
+@media (min-width: 761px) {
+  .auth {
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .auth-art {
+    height: 100vh;
+    position: sticky;
+    top: 0;
+  }
+
+  .auth-form {
+    height: 100vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .auth-form form {
+    margin: auto;
+  }
+}

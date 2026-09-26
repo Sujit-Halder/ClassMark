@@ -1,0 +1,1 @@
+.session-loader{min-height:100vh;display:grid;place-content:center;justify-items:center;gap:12px;background:#f6f8f7;color:#67736d}.session-loader .mark{animation:session-pulse 1.2s ease-in-out infinite}@keyframes session-pulse{50%{transform:scale(1.08);opacity:.72}}

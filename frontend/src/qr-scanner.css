@@ -1,0 +1,56 @@
+.qr-camera-scanner {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.scanner-region {
+  background: #17231f;
+  border-radius: 13px;
+  min-height: 280px;
+  overflow: hidden;
+  position: relative;
+}
+
+.qr-camera-scanner video {
+  object-fit: cover;
+}
+
+.scanner-placeholder {
+  align-content: center;
+  color: #d9e7e0;
+  display: grid;
+  gap: 12px;
+  inset: 0;
+  justify-items: center;
+  padding: 35px;
+  position: absolute;
+  text-align: center;
+}
+
+.scanner-placeholder svg {
+  height: 58px;
+  width: 58px;
+}
+
+.manual-qr {
+  border-top: 1px solid #e5ebe7;
+  margin-top: 18px;
+  padding-top: 15px;
+}
+
+.manual-qr summary {
+  color: #6255df;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.manual-qr textarea {
+  margin: 12px 0;
+}
+
+@media (max-width: 600px) {
+  .scanner-region {
+    min-height: 240px;
+  }
+}
