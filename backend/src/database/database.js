@@ -163,9 +163,28 @@ db.exec(`
     reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
     reviewed_at TEXT
   ) STRICT;
+  CREATE TABLE IF NOT EXISTS face_auth_grants (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose TEXT NOT NULL CHECK(purpose IN ('create-attendance')),
+    created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS attendance_review_requests (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES attendance_sessions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+    requested_at TEXT NOT NULL,
+    resolved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    resolved_at TEXT, resolution_note TEXT NOT NULL DEFAULT '',
+    UNIQUE(session_id,user_id)
+  ) STRICT;
   CREATE INDEX IF NOT EXISTS idx_face_sessions_user ON face_enrollment_sessions(user_id,created_at);
   CREATE INDEX IF NOT EXISTS idx_face_events_session ON face_events(session_id,captured_at);
   CREATE INDEX IF NOT EXISTS idx_face_events_user ON face_events(user_id,captured_at);
+  CREATE INDEX IF NOT EXISTS idx_face_auth_grants_user ON face_auth_grants(user_id,expires_at);
+  CREATE INDEX IF NOT EXISTS idx_attendance_reviews_session ON attendance_review_requests(session_id,status);
 `)
 
 export function transaction(work) {

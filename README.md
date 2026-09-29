@@ -150,6 +150,16 @@ npm run lint      # frontend checks
 - Do not commit JWT secrets, SMTP passwords, AWS credentials or biometric data.
 - The backend can serve the sibling `frontend/dist`, but Nginx static delivery is recommended in production.
 
+## Identity and attendance workflow
+
+1. Every new teacher and student signs in and completes AWS live-face enrollment before the rest of the portal is activated.
+2. An enrolled teacher must authenticate against their saved face immediately before generating each attendance QR code. The authorization is valid for five minutes and can create only one session.
+3. A student scans the live QR code and passes classroom proximity verification.
+4. The student then captures a front-camera image that must match their own enrolled Rekognition identity.
+5. Attendance is complete only after QR, location, and face verification all pass. QR/location without face is retained as a partial record, not present attendance.
+6. If face authentication cannot be completed, the student can request manual verification. Classroom teachers receive an in-app notification and can approve or reject the request in the attendance page.
+7. In-app notifications are stored in SQLite with no unread-count limit. Users can mark individual notifications or all notifications as read.
+
 ## Fresh EC2 installation
 
 The commands below assume Ubuntu, `/opt/classmark`, a root-owned Git checkout, Nginx, and systemd. Replace the repository URL and domain.
