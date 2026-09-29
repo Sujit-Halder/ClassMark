@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Camera, CameraOff, QrCode } from 'lucide-react'
-import './qr-scanner.css'
+import '../../styles/qr-scanner.css'
 
 export default function QrCameraScanner({ onScan, disabled }) {
   const scannerRef = useRef(null)

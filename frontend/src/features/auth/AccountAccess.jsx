@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { BookOpen, Check, Eye, EyeOff, MapPin, ScanFace, ShieldCheck, Users } from 'lucide-react'
-import './auth.css'
-import './auth-layout.css'
+import '../../styles/auth.css'
+import '../../styles/auth-layout.css'
 
 const API=import.meta.env.VITE_API_URL||'/api'
 async function request(path,body){const response=await fetch(API+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw Error(data.message);return data}

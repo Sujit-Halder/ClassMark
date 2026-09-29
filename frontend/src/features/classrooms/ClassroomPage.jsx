@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Archive, ArrowLeft, BookOpen, Calendar, Check, ClipboardList, Copy, ExternalLink, FileText, Link, Lock, Mail, Megaphone, Pencil, Plus, Send, Trash2, Unlock, UserMinus, Users } from 'lucide-react'
-import './classroom.css'
-import './assignment-controls.css'
+import '../../styles/classroom.css'
+import '../../styles/assignment-controls.css'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 async function api(path, options = {}) {

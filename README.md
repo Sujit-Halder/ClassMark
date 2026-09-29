@@ -1,77 +1,134 @@
-# Facial and QR Code Attendance System
+# Classmark Attendance System
 
-An attendance-management project for teachers and students, using facial recognition or QR codes. The frontend runs on React, Vite, and Tailwind CSS.
+Classmark provides teacher/student access, classrooms, invitations, assignments, resources, QR and location-verified attendance, profile settings, and AWS Rekognition face workflows.
 
-## Requirements
+The repository contains two independent Node.js applications. Each owns its dependencies, commands and lockfile.
 
-- Node.js 20.19+ or 22.12+
-- npm 10+
+## Repository structure
 
-## Development
+```text
+Attendance-System/
+├── backend/
+│   ├── src/
+│   │   ├── database/
+│   │   ├── services/
+│   │   └── index.js
+│   ├── data/                 runtime SQLite database (ignored)
+│   ├── .env.example
+│   ├── .gitignore
+│   ├── README.md
+│   ├── package.json
+│   └── package-lock.json
+├── frontend/
+│   ├── src/
+│   │   ├── features/
+│   │   ├── lib/
+│   │   ├── styles/
+│   │   ├── App.jsx
+│   │   └── main.jsx
+│   ├── .env.example
+│   ├── .gitignore
+│   ├── README.md
+│   ├── package.json
+│   ├── package-lock.json
+│   └── vite.config.js
+├── .gitignore
+├── README.md
+└── REKOGNITION_SETUP.md
+```
+
+## Local development
+
+Use two terminals. There is intentionally no root npm workspace.
+
+Terminal 1:
 
 ```bash
+cd backend
+cp .env.example .env
 npm install
 npm run dev
 ```
 
-This starts both applications concurrently:
+Terminal 2:
+
+```bash
+cd frontend
+cp .env.example .env
+npm install
+npm run dev
+```
 
 - Frontend: `http://localhost:5173`
-- Backend API: `http://localhost:4000`
+- Backend: `http://localhost:4000`
+- LAN: `http://YOUR_COMPUTER_LAN_IP:5173`
 
-To run them separately:
+See [frontend/README.md](frontend/README.md) and [backend/README.md](backend/README.md) for details.
 
-```bash
-npm run dev:frontend
-npm run dev:backend
-```
+## EC2 update for this structure
 
-## Environment
+After pulling the new version:
 
 ```bash
-copy frontend\.env.example frontend\.env
-copy backend\.env.example backend\.env
-```
+cd /opt/classmark/backend
+npm ci --omit=dev
 
-Configure SMTP values in `backend/.env` to send real invitation emails. Without SMTP, invite links are printed in the backend terminal.
-
-## Project structure
-
-```text
-attendance-system/
-├── frontend/
-│   ├── src/                 React UI and styles
-│   ├── .env.example         Browser API configuration
-│   ├── eslint.config.js
-│   ├── package.json
-│   └── vite.config.js
-├── backend/
-│   ├── src/index.js         Express API
-│   ├── data/db.json         Development data store
-│   ├── .env.example         Server and SMTP configuration
-│   ├── eslint.config.js
-│   └── package.json
-├── package.json             npm workspace commands
-└── package-lock.json        Shared dependency lock
-```
-
-Install once from the repository root. npm workspaces manage both applications.
-
-## Implemented MVP
-
-- Teacher/student registration and password authentication
-- Required profile fields, profile pictures, preferences, and role-based permissions
-- Teacher-owned classrooms and email-bound invitations
-- Five-minute QR sessions with teacher/student GPS distance validation
-- Automatic absent records and teacher attendance at finalization
-- Browser camera capture and biometric enrollment pipeline
-- Normalized SQLite storage with strict tables, foreign keys, indexes, WAL, and transactions
-
-Production facial matching requires a recognition provider or self-hosted model, encrypted face embeddings, liveness detection, consent/retention policies, and the selected classroom camera hardware.
-
-## Checks
-
-```bash
-npm run lint
+cd /opt/classmark/frontend
+npm ci --include=dev
 npm run build
 ```
+
+The backend does not need frontend build tools. Restart it after installation and build:
+
+```bash
+pm2 restart classmark
+pm2 save
+```
+
+If PM2 previously used the removed root workspace command, replace it once:
+
+```bash
+pm2 delete classmark
+cd /opt/classmark/backend
+pm2 start src/index.js --name classmark
+pm2 save
+```
+
+For systemd, use `WorkingDirectory=/opt/classmark/backend` and `ExecStart=/usr/bin/node /opt/classmark/backend/src/index.js`, then run:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart classmark
+```
+
+Keep Nginx serving `/opt/classmark/frontend/dist` and proxying `/api/` to `http://127.0.0.1:4000`.
+
+## Why `git pull` may fail on EC2
+
+First inspect the actual error:
+
+```bash
+cd /opt/classmark
+git status
+git remote -v
+git branch --show-current
+```
+
+Common causes and fixes:
+
+1. **`not a git repository`** — the directory was uploaded rather than cloned, or `.git` is missing. Preserve `.env` and the database, then clone the repository properly.
+2. **Permission denied** — files are owned by another account. Make the real deployment user the owner, for example `sudo chown -R ubuntu:ubuntu /opt/classmark`.
+3. **GitHub authentication failed** — account passwords cannot authenticate Git operations. Configure an SSH deploy key or fine-grained token and correct `origin`.
+4. **Local changes would be overwritten** — run `git status`. Commit legitimate source changes or use `git stash`. Keep `.env` and SQLite ignored; never blindly reset production data.
+5. **Dubious ownership** — only after verifying the directory is trusted, run `git config --global --add safe.directory /opt/classmark` as the deployment user.
+6. **No upstream branch** — run `git branch --set-upstream-to=origin/main main` once, adjusting the branch name if needed.
+
+A normal safe update is:
+
+```bash
+cd /opt/classmark
+git status
+git pull --ff-only
+```
+
+Do not use `git reset --hard` on EC2 unless `.env`, `backend/data/classmark.sqlite`, and intentional server changes have been backed up.

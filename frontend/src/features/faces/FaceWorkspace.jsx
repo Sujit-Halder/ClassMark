@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Camera, Check, RefreshCw, ScanFace, ShieldCheck, Trash2, Users } from 'lucide-react'
-import './face-workspace.css'
+import '../../styles/face-workspace.css'
 
 const API=import.meta.env.VITE_API_URL||'/api'
 async function api(path,options={}){const response=await fetch(API+path,{...options,headers:{'Content-Type':'application/json',Authorization:`Bearer ${localStorage.token}`}}),data=await response.json();if(!response.ok)throw Error(data.message);return data}

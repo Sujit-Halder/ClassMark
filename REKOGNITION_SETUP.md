@@ -112,7 +112,10 @@ The health response should contain `"rekognition":true`.
 ```bash
 cd /opt/classmark
 sudo -u classmark git pull
-sudo -u classmark npm ci
+cd backend
+sudo -u classmark npm ci --omit=dev
+cd ../frontend
+sudo -u classmark npm ci --include=dev
 sudo -u classmark npm run build
 sudo systemctl restart classmark
 sudo systemctl reload nginx

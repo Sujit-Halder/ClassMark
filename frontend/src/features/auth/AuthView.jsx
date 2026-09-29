@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { BookOpen, Check, Eye, EyeOff, MapPin, ScanFace, ShieldCheck, Users } from 'lucide-react'
-import './auth.css'
+import '../../styles/auth.css'
 const API=import.meta.env.VITE_API_URL||'/api'
 async function request(path,body){const r=await fetch(API+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)throw Error(d.message);return d}
 const Mark=()=> <span className="mark"><Check/></span>

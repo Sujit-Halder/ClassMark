@@ -10,8 +10,8 @@ import { rateLimit } from 'express-rate-limit'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { db, now, transaction } from './database.js'
-import { createLivenessSession, deleteEnrollment, enrollReferenceImage, faceConfig, getLivenessResult, identifyFace } from './awsFaces.js'
+import { db, now, transaction } from './database/database.js'
+import { createLivenessSession, deleteEnrollment, enrollReferenceImage, faceConfig, getLivenessResult, identifyFace } from './services/awsFaces.js'
 
 const port=Number(process.env.PORT||4000), secret=process.env.JWT_SECRET||'development-only-secret-change-me', appUrl=process.env.APP_URL||'http://localhost:5173'
 const frontendDist=join(dirname(dirname(dirname(fileURLToPath(import.meta.url)))),'frontend','dist')

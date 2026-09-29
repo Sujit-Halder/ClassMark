@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bell, Camera, Check, Eye, EyeOff, Laptop, LockKeyhole, Moon, Palette, ShieldCheck, Sun, Trash2, UserRound } from 'lucide-react'
-import { applyAppearance } from './appearance.js'
-import './settings-page.css'
+import { applyAppearance } from '../../lib/appearance.js'
+import '../../styles/settings-page.css'
 
 const API = import.meta.env.VITE_API_URL || '/api'
 const initialSettings = { theme: 'system', font: 'dm-sans', emailNotifications: true, attendanceNotifications: true, invitationNotifications: true }
