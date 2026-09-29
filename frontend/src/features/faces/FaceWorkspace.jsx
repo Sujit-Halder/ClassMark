@@ -1,13 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
-  Camera,
   Check,
   RefreshCw,
   ScanFace,
   ShieldCheck,
   Trash2,
-  Users,
 } from "lucide-react";
 import "../../styles/face-workspace.css";
 
@@ -26,8 +24,8 @@ async function api(path, options = {}) {
 }
 
 function LivenessCheck({ enrollment, onComplete, onCancel }) {
-  const [Detector, setDetector] = useState(null);
-  const [error, setError] = useState("");
+  const [Detector, setDetector] = useState(null),
+    [error, setError] = useState("");
   useEffect(() => {
     let mounted = true;
     Promise.all([
@@ -55,7 +53,7 @@ function LivenessCheck({ enrollment, onComplete, onCancel }) {
     const detail = event?.error?.message || event?.message || event?.name;
     if (/permission|camera/i.test(detail || ""))
       setError(
-        "Camera access failed. Open this page in Chrome or Safari over HTTPS and allow camera permission.",
+        "Camera access failed. Open this page over HTTPS and allow front-camera permission.",
       );
     else if (/credential|access.?denied|unauthorized/i.test(detail || ""))
       setError(
@@ -64,7 +62,7 @@ function LivenessCheck({ enrollment, onComplete, onCancel }) {
     else
       setError(
         detail ||
-          "The live camera check was interrupted. Keep this page open and try again on a stable connection.",
+          "The live camera check was interrupted. Keep this page open and retry on a stable connection.",
       );
   }
   return (
@@ -74,8 +72,8 @@ function LivenessCheck({ enrollment, onComplete, onCancel }) {
           <small>LIVE ENROLLMENT</small>
           <h2>Quick live face check</h2>
           <p>
-            Use the front camera, keep your face fully visible, then move closer
-            when the oval asks you to. No flashing-light sequence is used.
+            Use the front camera, keep your face visible, and move closer when
+            prompted.
           </p>
         </div>
         <button className="outline" onClick={onCancel}>
@@ -85,15 +83,15 @@ function LivenessCheck({ enrollment, onComplete, onCancel }) {
       <div className="liveness-tips">
         <span>
           <Check />
-          Face a window or soft room light
+          Use soft, even light
         </span>
         <span>
           <Check />
-          Remove sunglasses, mask, hat, and hand obstructions
+          Remove face obstructions
         </span>
         <span>
           <Check />
-          Keep the phone at eye level and the camera lens clean
+          Hold the phone at eye level
         </span>
       </div>
       {error && <p className="error">{error}</p>}
@@ -114,258 +112,28 @@ function LivenessCheck({ enrollment, onComplete, onCancel }) {
   );
 }
 
-function RecognitionCamera({ sessions }) {
-  const video = useRef(null),
-    canvas = useRef(null),
-    stream = useRef(null);
-  const [sessionId, setSessionId] = useState(sessions[0]?.id || "");
-  const [active, setActive] = useState(false),
-    [photo, setPhoto] = useState(""),
-    [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null),
-    [message, setMessage] = useState(""),
-    [events, setEvents] = useState([]);
-  async function loadEvents(id = sessionId) {
-    if (!id) return setEvents([]);
-    try {
-      setEvents(await api(`/sessions/${id}/face-events`));
-    } catch (err) {
-      setMessage(err.message);
-    }
-  }
-  useEffect(() => {
-    let current = true;
-    if (!sessionId) return;
-    api(`/sessions/${sessionId}/face-events`)
-      .then((rows) => current && setEvents(rows))
-      .catch((err) => current && setMessage(err.message));
-    return () => {
-      current = false;
-    };
-  }, [sessionId]);
-  useEffect(
-    () => () => stream.current?.getTracks().forEach((track) => track.stop()),
-    [],
-  );
-  async function start() {
-    setMessage("");
-    setResult(null);
-    setPhoto("");
-    try {
-      stream.current = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      });
-      video.current.srcObject = stream.current;
-      setActive(true);
-    } catch {
-      setMessage(
-        "Camera permission is required. Use HTTPS and allow camera access.",
-      );
-    }
-  }
-  function capture() {
-    const source = video.current,
-      c = canvas.current,
-      maxWidth = 1280,
-      scale = Math.min(1, maxWidth / source.videoWidth);
-    c.width = Math.round(source.videoWidth * scale);
-    c.height = Math.round(source.videoHeight * scale);
-    c.getContext("2d").drawImage(source, 0, 0, c.width, c.height);
-    setPhoto(c.toDataURL("image/jpeg", 0.78));
-    stream.current?.getTracks().forEach((track) => track.stop());
-    setActive(false);
-  }
-  async function identify() {
-    if (!sessionId)
-      return setMessage("Generate an attendance QR session first.");
-    setBusy(true);
-    setMessage("");
-    try {
-      const response = await api("/faces/identify", {
-        method: "POST",
-        body: JSON.stringify({
-          sessionId,
-          image: photo,
-          cameraLabel: "mobile-entrance-camera",
-        }),
-      });
-      setResult(response);
-      setMessage(response.message);
-      await loadEvents();
-    } catch (err) {
-      setMessage(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="recognition-layout">
-      <section className="panel recognition-camera">
-        <div className="biometric-heading">
-          <div>
-            <small>TEACHER CAMERA</small>
-            <h2>Entrance recognition</h2>
-            <p>Capture one clearly visible student at a time.</p>
-          </div>
-        </div>
-        <label>
-          Active attendance session
-          <select
-            value={sessionId}
-            onChange={(event) => setSessionId(event.target.value)}
-          >
-            <option value="">Select active session</option>
-            {sessions.map((session) => (
-              <option key={session.id} value={session.id}>
-                {session.subject} — {session.classroomName} ·{" "}
-                {session.roomNumber}
-              </option>
-            ))}
-          </select>
-        </label>
-        {!sessions.length && (
-          <p className="warning-box">
-            <AlertTriangle />
-            Generate a QR attendance session first. Face events are tied to that
-            same session.
-          </p>
-        )}
-        <div className="face-camera-frame">
-          {photo ? (
-            <img src={photo} alt="Captured face" />
-          ) : (
-            <video ref={video} autoPlay playsInline muted />
-          )}
-          <canvas ref={canvas} />
-          {!active && !photo && (
-            <span>
-              <Camera />
-              <b>Rear camera is off</b>
-            </span>
-          )}
-        </div>
-        <div className="camera-actions">
-          {!active && !photo && (
-            <button className="primary" onClick={start}>
-              <Camera />
-              Open rear camera
-            </button>
-          )}
-          {active && (
-            <button className="primary" onClick={capture}>
-              <ScanFace />
-              Capture face
-            </button>
-          )}
-          {photo && (
-            <>
-              <button className="outline" onClick={start}>
-                Retake
-              </button>
-              <button
-                className="primary"
-                onClick={identify}
-                disabled={busy || !sessionId}
-              >
-                <ScanFace />
-                {busy ? "Identifying…" : "Identify student"}
-              </button>
-            </>
-          )}
-        </div>
-        {message && (
-          <p className={`recognition-message ${result?.status || ""}`}>
-            {message}
-          </p>
-        )}
-        {result?.user && (
-          <div className="recognized-user">
-            <Check />
-            <div>
-              <b>{result.user.name}</b>
-              <span>
-                {result.user.identifier || "No student ID"} ·{" "}
-                {result.attendanceDecision === "present"
-                  ? "Attendance complete"
-                  : "Waiting for QR verification"}
-              </span>
-            </div>
-          </div>
-        )}
-      </section>
-      <section className="panel recognition-events">
-        <div className="biometric-heading">
-          <div>
-            <small>RECENT EVENTS</small>
-            <h2>Recognition log</h2>
-          </div>
-          <button className="outline" onClick={() => loadEvents()}>
-            <RefreshCw />
-            Refresh
-          </button>
-        </div>
-        {events.length ? (
-          events.map((event) => (
-            <article key={event.id} className={`face-event ${event.status}`}>
-              <span>
-                <Users />
-              </span>
-              <div>
-                <b>{event.userName || event.status}</b>
-                <small>{event.identifier || event.reason}</small>
-                <time>{new Date(event.capturedAt).toLocaleString()}</time>
-              </div>
-              {event.confidence != null && (
-                <em>{event.confidence.toFixed(1)}%</em>
-              )}
-            </article>
-          ))
-        ) : (
-          <p className="muted">Recognition events will appear here.</p>
-        )}
-      </section>
-    </div>
-  );
-}
-
 export default function FaceWorkspace({ user, Title, onEnrolled }) {
   const [status, setStatus] = useState(null),
     [consent, setConsent] = useState(false),
-    [enrollment, setEnrollment] = useState(null);
-  const [sessions, setSessions] = useState([]),
+    [enrollment, setEnrollment] = useState(null),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState("");
   async function load() {
     try {
-      const current = await api("/faces/status");
-      setStatus(current);
-      if (user.role === "teacher")
-        setSessions(await api("/faces/active-sessions"));
-    } catch (err) {
-      setMessage(err.message);
+      setStatus(await api("/faces/status"));
+    } catch (error) {
+      setMessage(error.message);
     }
   }
   useEffect(() => {
     let current = true;
     api("/faces/status")
-      .then(async (faceStatus) => {
-        if (!current) return;
-        setStatus(faceStatus);
-        if (user.role === "teacher") {
-          const rows = await api("/faces/active-sessions");
-          if (current) setSessions(rows);
-        }
-      })
-      .catch((err) => current && setMessage(err.message));
+      .then((result) => current && setStatus(result))
+      .catch((error) => current && setMessage(error.message));
     return () => {
       current = false;
     };
-  }, [user.role]);
+  }, []);
   async function begin() {
     setBusy(true);
     setMessage("");
@@ -376,15 +144,15 @@ export default function FaceWorkspace({ user, Title, onEnrolled }) {
           body: JSON.stringify({ consent }),
         }),
       );
-    } catch (err) {
-      setMessage(err.message);
+    } catch (error) {
+      setMessage(error.message);
     } finally {
       setBusy(false);
     }
   }
   async function complete() {
     setBusy(true);
-    setMessage("Processing your liveness result and creating the face vector…");
+    setMessage("Processing your live face result…");
     try {
       const result = await api("/faces/liveness/complete", {
         method: "POST",
@@ -394,8 +162,8 @@ export default function FaceWorkspace({ user, Title, onEnrolled }) {
       setEnrollment(null);
       await load();
       onEnrolled?.();
-    } catch (err) {
-      setMessage(err.message);
+    } catch (error) {
+      setMessage(error.message);
       setEnrollment(null);
     } finally {
       setBusy(false);
@@ -404,7 +172,7 @@ export default function FaceWorkspace({ user, Title, onEnrolled }) {
   async function remove() {
     if (
       !confirm(
-        "Delete your enrolled AWS Rekognition face vectors? You will need to complete liveness enrollment again.",
+        "Delete your enrolled AWS Rekognition face profile? You will need to enroll again before using classrooms or attendance.",
       )
     )
       return;
@@ -413,8 +181,8 @@ export default function FaceWorkspace({ user, Title, onEnrolled }) {
       const result = await api("/faces/profile", { method: "DELETE" });
       setMessage(result.message);
       await load();
-    } catch (err) {
-      setMessage(err.message);
+    } catch (error) {
+      setMessage(error.message);
     } finally {
       setBusy(false);
     }
@@ -425,7 +193,7 @@ export default function FaceWorkspace({ user, Title, onEnrolled }) {
         <Title
           over="BIOMETRIC IDENTITY"
           title="Secure face enrollment"
-          text="AWS verifies liveness before creating your searchable face profile."
+          text="Complete the short AWS live-face check using your front camera."
         />
         <LivenessCheck
           enrollment={enrollment}
@@ -439,12 +207,8 @@ export default function FaceWorkspace({ user, Title, onEnrolled }) {
     <>
       <Title
         over="BIOMETRIC IDENTITY"
-        title="Face recognition"
-        text={
-          user.role === "teacher"
-            ? "Enroll your own face or operate a mobile entrance camera for an active class."
-            : "Complete a secure liveness check to enable facial attendance."
-        }
+        title="Face profile"
+        text="Manage the verified identity used for portal activation and attendance authentication."
       />
       {!status ? (
         <section className="panel liveness-loading">
@@ -460,23 +224,23 @@ export default function FaceWorkspace({ user, Title, onEnrolled }) {
               {status.profile?.verified ? <Check /> : <ShieldCheck />}
             </div>
             <div>
-              <small>FACE PROFILE</small>
+              <small>IDENTITY STATUS</small>
               <h2>
                 {status.profile?.verified
-                  ? "Verified with AWS Rekognition"
+                  ? "Face identity verified"
                   : "Enrollment required"}
               </h2>
               <p>
                 {status.profile?.verified
-                  ? `Enrolled ${new Date(status.profile.enrolled_at).toLocaleString()}. Face vectors are stored in ${status.profile.collection_id}.`
-                  : "Complete a liveness check before facial identification can recognize you."}
+                  ? `Your verified identity was enrolled ${new Date(status.profile.enrolled_at).toLocaleString()}.`
+                  : `Complete one secure live-face enrollment to activate this ${user.role} account.`}
               </p>
               {!status.configured && (
                 <p className="warning-box">
                   <AlertTriangle />
                   {!status.backendConfigured
                     ? "The server is missing REKOGNITION_COLLECTION_ID. "
-                    : "The frontend liveness flow is missing COGNITO_IDENTITY_POOL_ID."}
+                    : "The liveness flow is missing COGNITO_IDENTITY_POOL_ID."}
                 </p>
               )}
             </div>
@@ -493,7 +257,7 @@ export default function FaceWorkspace({ user, Title, onEnrolled }) {
                   disabled={busy || !consent || !status.configured}
                 >
                   <ScanFace />
-                  {busy ? "Starting…" : "Begin liveness enrollment"}
+                  {busy ? "Starting…" : "Begin secure enrollment"}
                 </button>
               )}
             </div>
@@ -507,16 +271,11 @@ export default function FaceWorkspace({ user, Title, onEnrolled }) {
               />
               <span>
                 <b>I consent to biometric processing</b>I understand that AWS
-                Rekognition will create face vectors for identification and that
-                I can delete my face profile from this page.
+                Rekognition creates face vectors for identity matching and that
+                I can delete this profile.
               </span>
             </label>
           )}
-          {user.role === "teacher" &&
-            status.profile?.verified &&
-            status.backendConfigured && (
-              <RecognitionCamera sessions={sessions} />
-            )}
         </>
       )}
       {message && <p className="status-message">{message}</p>}

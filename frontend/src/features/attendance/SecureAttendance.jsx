@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import QrCameraScanner from "./QrCameraScanner.jsx";
+import { getReliableLocation } from "../../lib/location.js";
 import "../../styles/secure-attendance.css";
 
 const API = import.meta.env.VITE_API_URL || "/api";
@@ -161,9 +162,18 @@ function TeacherAttendance() {
     }
   }
   useEffect(() => {
-    let current=true
-    Promise.all([api("/classrooms"),api("/attendance/review-requests")]).then(([items,pendingReviews])=>{if(!current)return;setRooms(items);setReviews(pendingReviews);if(items[0])setRoomId(items[0].id)}).catch(error=>current&&setMessage(error.message))
-    return()=>{current=false}
+    let current = true;
+    Promise.all([api("/classrooms"), api("/attendance/review-requests")])
+      .then(([items, pendingReviews]) => {
+        if (!current) return;
+        setRooms(items);
+        setReviews(pendingReviews);
+        if (items[0]) setRoomId(items[0].id);
+      })
+      .catch((error) => current && setMessage(error.message));
+    return () => {
+      current = false;
+    };
   }, []);
   async function generate() {
     if (!grant)
@@ -171,36 +181,30 @@ function TeacherAttendance() {
     if (!roomId || !roomNumber)
       return setMessage("Choose a classroom and enter its room number.");
     setBusy(true);
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        try {
-          const result = await api(`/classrooms/${roomId}/sessions`, {
-            method: "POST",
-            body: JSON.stringify({
-              roomNumber,
-              radius,
-              faceGrantId: grant,
-              lat: position.coords.latitude,
-              lng: position.coords.longitude,
-            }),
-          });
-          setSession(result);
-          setGrant("");
-          setMessage(
-            "Secure QR session created after teacher identity verification.",
-          );
-        } catch (error) {
-          setMessage(error.message);
-        } finally {
-          setBusy(false);
-        }
-      },
-      () => {
-        setBusy(false);
-        setMessage("Precise location permission is required.");
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-    );
+    setMessage("Finding the most accurate GPS position…");
+    try {
+      const location = await getReliableLocation();
+      const result = await api(`/classrooms/${roomId}/sessions`, {
+        method: "POST",
+        body: JSON.stringify({
+          roomNumber,
+          radius,
+          faceGrantId: grant,
+          lat: location.lat,
+          lng: location.lng,
+          accuracy: location.accuracy,
+        }),
+      });
+      setSession(result);
+      setGrant("");
+      setMessage(
+        `Secure QR created. Teacher GPS accuracy: ±${Math.round(location.accuracy)} m.`,
+      );
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
   }
   async function resolve(id, decision) {
     try {
@@ -376,35 +380,28 @@ function StudentAttendance() {
     if (parsed.type !== "classmark-attendance")
       return setMessage("This QR code is not a Classmark attendance session.");
     setBusy(true);
-    setMessage("QR recognized. Verifying proximity…");
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        try {
-          const result = await api("/attendance/check-in", {
-            method: "POST",
-            body: JSON.stringify({
-              sessionId: parsed.sessionId,
-              code: parsed.code,
-              lat: position.coords.latitude,
-              lng: position.coords.longitude,
-            }),
-          });
-          setPending({ sessionId: result.sessionId });
-          setMessage(
-            `${result.message} Reported distance: ${result.distance}m.`,
-          );
-        } catch (error) {
-          setMessage(error.message);
-        } finally {
-          setBusy(false);
-        }
-      },
-      () => {
-        setBusy(false);
-        setMessage("Precise location permission is required.");
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-    );
+    setMessage("QR recognized. Finding an accurate GPS position…");
+    try {
+      const location = await getReliableLocation();
+      const result = await api("/attendance/check-in", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: parsed.sessionId,
+          code: parsed.code,
+          lat: location.lat,
+          lng: location.lng,
+          accuracy: location.accuracy,
+        }),
+      });
+      setPending({ sessionId: result.sessionId });
+      setMessage(
+        `${result.message} Distance: ${result.distance} m · GPS accuracy: ±${result.accuracy} m.`,
+      );
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
   }
   async function requestReview() {
     try {

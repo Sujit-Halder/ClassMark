@@ -12,6 +12,7 @@ import { applyAppearance, watchSystemAppearance } from "./lib/appearance.js";
 import "./styles/functional.css";
 import "./styles/session.css";
 import "./styles/profile-picture.css";
+import "./styles/header.css";
 import {
   BookOpen,
   CalendarDays,
@@ -900,22 +901,56 @@ function Side({ page, setPage, user, logout, open, setOpen }) {
     </aside>
   );
 }
-function Top({ title, open }) {
+function Top({ title, open, user }) {
+  const searchRef = useRef(null);
+  const initials = (user.name || user.email || "U")
+    .split(" ")
+    .map((part) => part[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+  useEffect(() => {
+    const focusSearch = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
   return (
     <header className="top">
-      <button className="hamb" onClick={open}>
+      <button
+        className="hamb top-icon-button"
+        onClick={open}
+        aria-label="Open navigation"
+      >
         <Menu />
       </button>
-      <div>
+      <div className="top-title">
         <small>CLASSMARK PORTAL</small>
         <h3>{title}</h3>
       </div>
-      <label>
+      <label className="top-search">
         <Search />
-        <input placeholder="Search classes, students…" />
+        <input
+          ref={searchRef}
+          placeholder="Search classes and students"
+          aria-label="Search classes and students"
+        />
+        <kbd>Ctrl K</kbd>
       </label>
-      <NotificationCenter />
-      <span className="avatar">AS</span>
+      <div className="top-actions">
+        <NotificationCenter />
+        <div className="top-profile">
+          <span className="avatar">{initials}</span>
+          <span>
+            <b>{user.name}</b>
+            <small>{user.role}</small>
+          </span>
+        </div>
+      </div>
     </header>
   );
 }
@@ -1610,7 +1645,7 @@ export default function App() {
         }}
       />
       <div className="main">
-        <Top title={titles[page]} open={() => setNav(true)} />
+        <Top title={titles[page]} open={() => setNav(true)} user={user} />
         {notice && (
           <div className="global-notice">
             {notice}

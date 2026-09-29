@@ -136,7 +136,11 @@ for (const [name, definition] of [
   ['face_verified_at', 'TEXT'],
   ['face_event_id', 'TEXT'],
   ['decision_reason', "TEXT NOT NULL DEFAULT ''"],
+  ['location_accuracy_meters', 'REAL'],
 ]) if (!attendanceRecordColumns.includes(name)) db.exec(`ALTER TABLE attendance_records ADD COLUMN ${name} ${definition}`)
+
+const attendanceSessionColumns = db.prepare('PRAGMA table_info(attendance_sessions)').all().map((column) => column.name)
+if (!attendanceSessionColumns.includes('location_accuracy_meters')) db.exec('ALTER TABLE attendance_sessions ADD COLUMN location_accuracy_meters REAL')
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS face_enrollment_sessions (
@@ -148,20 +152,6 @@ db.exec(`
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     completed_at TEXT
-  ) STRICT;
-  CREATE TABLE IF NOT EXISTS face_events (
-    id TEXT PRIMARY KEY,
-    classroom_id TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
-    session_id TEXT REFERENCES attendance_sessions(id) ON DELETE CASCADE,
-    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-    captured_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    camera_label TEXT NOT NULL DEFAULT 'mobile-camera',
-    confidence REAL,
-    status TEXT NOT NULL CHECK(status IN ('matched','review','unmatched','rejected')),
-    reason TEXT NOT NULL DEFAULT '',
-    captured_at TEXT NOT NULL,
-    reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-    reviewed_at TEXT
   ) STRICT;
   CREATE TABLE IF NOT EXISTS face_auth_grants (
     id TEXT PRIMARY KEY,
@@ -181,8 +171,6 @@ db.exec(`
     UNIQUE(session_id,user_id)
   ) STRICT;
   CREATE INDEX IF NOT EXISTS idx_face_sessions_user ON face_enrollment_sessions(user_id,created_at);
-  CREATE INDEX IF NOT EXISTS idx_face_events_session ON face_events(session_id,captured_at);
-  CREATE INDEX IF NOT EXISTS idx_face_events_user ON face_events(user_id,captured_at);
   CREATE INDEX IF NOT EXISTS idx_face_auth_grants_user ON face_auth_grants(user_id,expires_at);
   CREATE INDEX IF NOT EXISTS idx_attendance_reviews_session ON attendance_review_requests(session_id,status);
 `)
