@@ -81,7 +81,8 @@ MAIL_FROM=Classmark <no-reply@classmark.local>
 AWS_REGION=ap-south-1
 REKOGNITION_COLLECTION_ID=classmark-faces
 COGNITO_IDENTITY_POOL_ID=
-FACE_LIVENESS_THRESHOLD=90
+FACE_LIVENESS_THRESHOLD=60
+FACE_LIVENESS_CHALLENGE=movement
 FACE_MATCH_THRESHOLD=92
 FACE_AMBIGUITY_MARGIN=3
 ```
@@ -164,26 +165,20 @@ node --version
 npm --version
 ```
 
-### 2. Configure GitHub SSH access
+### 2. Configure Git
 
 ```bash
 git config --global user.name "Sujit Halder"
 git config --global user.email "YOUR_GITHUB_EMAIL"
-ssh-keygen -t ed25519 -C "YOUR_GITHUB_EMAIL"
-cat /root/.ssh/id_ed25519.pub
 ```
 
-Add the displayed public key to GitHub **Settings → SSH and GPG keys**, then test:
-
-```bash
-ssh -T git@github.com
-```
+The repository uses HTTPS. Public pulls require no GitHub authentication. To push from EC2, use your GitHub username and a fine-grained personal access token when Git requests a password. Do not put the token in the repository or an environment file.
 
 ### 3. Clone
 
 ```bash
 cd /opt
-git clone git@github.com:Sujit-Halder/Facial-QR-code-based-classroom.git classmark
+git clone https://github.com/Sujit-Halder/Facial-QR-code-based-classroom.git classmark
 cd /opt/classmark
 git status
 git remote -v
@@ -371,10 +366,10 @@ git branch -vv
 ```
 
 - **Not a Git repository:** clone instead of copying files; `.git` is missing.
-- **Authentication failed:** configure the root SSH key and use the SSH remote URL.
+- **Authentication failed while pushing:** GitHub account passwords are not accepted for Git operations. Use your GitHub username and a fine-grained personal access token with repository write permission.
 - **Local changes block pull:** commit legitimate changes or use `git stash`. Never discard production data blindly.
 - **No upstream branch:** run `git branch --set-upstream-to=origin/main main`.
-- **HTTPS remote blocks push:** change it with `git remote set-url origin git@github.com:Sujit-Halder/Facial-QR-code-based-classroom.git`.
+- **Incorrect remote:** restore the HTTPS remote with `git remote set-url origin https://github.com/Sujit-Halder/Facial-QR-code-based-classroom.git`.
 - **Dubious ownership:** ensure root owns this intended checkout, then use `git config --global --add safe.directory /opt/classmark` only after verifying the path.
 
 Never commit or delete `backend/.env` or `backend/data/classmark.sqlite`. Avoid `git reset --hard` on a production server without verified backups.

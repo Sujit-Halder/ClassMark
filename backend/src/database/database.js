@@ -68,6 +68,12 @@ db.exec(`
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     token_hash TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, used_at TEXT, created_at TEXT NOT NULL
   ) STRICT;
+  CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK(type IN ('general','attendance','invitation')),
+    title TEXT NOT NULL, message TEXT NOT NULL, link TEXT,
+    read_at TEXT, created_at TEXT NOT NULL
+  ) STRICT;
   CREATE TABLE IF NOT EXISTS classroom_posts (
     id TEXT PRIMARY KEY, classroom_id TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
     author_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -93,6 +99,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_attendance_classroom ON attendance_records(classroom_id);
   CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON attendance_sessions(expires_at);
   CREATE INDEX IF NOT EXISTS idx_password_reset_expiry ON password_reset_tokens(expires_at);
+  CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id,read_at,created_at);
   CREATE INDEX IF NOT EXISTS idx_posts_classroom ON classroom_posts(classroom_id,created_at);
   CREATE INDEX IF NOT EXISTS idx_assignments_classroom ON assignments(classroom_id,due_at);
 `)
@@ -102,6 +109,7 @@ if (!classroomColumns.includes('class_code')) db.exec('ALTER TABLE classrooms AD
 if (!classroomColumns.includes('archived_at')) db.exec('ALTER TABLE classrooms ADD COLUMN archived_at TEXT')
 if (!classroomColumns.includes('is_locked')) db.exec('ALTER TABLE classrooms ADD COLUMN is_locked INTEGER NOT NULL DEFAULT 0')
 db.exec(`UPDATE classrooms SET class_code=upper(substr(hex(randomblob(8)),1,10)) WHERE class_code IS NULL; CREATE UNIQUE INDEX IF NOT EXISTS idx_classrooms_code ON classrooms(class_code);`)
+db.exec('DROP TABLE IF EXISTS push_subscriptions;')
 
 const invitationColumns = db.prepare('PRAGMA table_info(invitations)').all().map((column) => column.name)
 if (!invitationColumns.includes('invitee_role')) db.exec("ALTER TABLE invitations ADD COLUMN invitee_role TEXT NOT NULL DEFAULT 'student'")
