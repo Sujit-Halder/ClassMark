@@ -831,7 +831,7 @@ function ProfileAvatar({ user }) {
     };
   }, [user.id]);
   return (
-    <span>
+    <span className="profile-avatar">
       {picture ? (
         <img src={picture} alt={`${user.name} profile`} />
       ) : (
@@ -901,14 +901,8 @@ function Side({ page, setPage, user, logout, open, setOpen }) {
     </aside>
   );
 }
-function Top({ title, open, user }) {
+function Top({ title, open, user, setPage }) {
   const searchRef = useRef(null);
-  const initials = (user.name || user.email || "U")
-    .split(" ")
-    .map((part) => part[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
   useEffect(() => {
     const focusSearch = (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
@@ -943,13 +937,17 @@ function Top({ title, open, user }) {
       </label>
       <div className="top-actions">
         <NotificationCenter />
-        <div className="top-profile">
-          <span className="avatar">{initials}</span>
+        <button
+          className="top-profile"
+          onClick={() => setPage("settings")}
+          aria-label="Open profile settings"
+        >
+          <ProfileAvatar user={user} />
           <span>
             <b>{user.name}</b>
             <small>{user.role}</small>
           </span>
-        </div>
+        </button>
       </div>
     </header>
   );
@@ -1365,7 +1363,7 @@ function SettingsView({ user }) {
         setPendingPhoto("");
         window.dispatchEvent(new Event("profile-picture-updated"));
       }
-      setMessage("Profile and settings saved to SQLite.");
+      setMessage("Your profile and preferences were saved successfully.");
     } catch (e) {
       setMessage(e.message);
     }
@@ -1543,15 +1541,44 @@ function Modal({ data, close }) {
   );
 }
 export default function App() {
+  const initialQuery = new URLSearchParams(location.search);
+  const requestedPage = initialQuery.get("page");
   const [user, setUser] = useState(null),
     [checkingSession, setCheckingSession] = useState(() =>
       Boolean(localStorage.token),
     ),
-    [page, setPage] = useState("home"),
+    [page, setPage] = useState(
+      ["home", "classes", "attendance", "face", "people", "settings"].includes(
+        requestedPage,
+      )
+        ? requestedPage
+        : "home",
+    ),
+    [classNavigation, setClassNavigation] = useState(() => ({
+      classroomId: initialQuery.get("classroomId") || "",
+      tab: initialQuery.get("tab") || "",
+      assignmentId: initialQuery.get("assignmentId") || "",
+      nonce: Date.now(),
+    })),
     [nav, setNav] = useState(false),
     [modal, setModal] = useState(),
     [refresh, setRefresh] = useState(0),
     [notice, setNotice] = useState("");
+  useEffect(() => {
+    const navigate = (event) => {
+      const detail = event.detail || {};
+      if (detail.page) setPage(detail.page);
+      if (detail.classroomId)
+        setClassNavigation({
+          classroomId: detail.classroomId,
+          tab: detail.tab || "stream",
+          assignmentId: detail.assignmentId || "",
+          nonce: Date.now(),
+        });
+    };
+    window.addEventListener("classmark:navigate", navigate);
+    return () => window.removeEventListener("classmark:navigate", navigate);
+  }, []);
   useEffect(() => {
     if (!localStorage.token) return;
     api("/profile")
@@ -1645,7 +1672,12 @@ export default function App() {
         }}
       />
       <div className="main">
-        <Top title={titles[page]} open={() => setNav(true)} user={user} />
+        <Top
+          title={titles[page]}
+          open={() => setNav(true)}
+          user={user}
+          setPage={setPage}
+        />
         {notice && (
           <div className="global-notice">
             {notice}
@@ -1668,6 +1700,7 @@ export default function App() {
               user={user}
               openModal={setModal}
               refresh={refresh}
+              navigation={classNavigation}
             />
           )}{" "}
           {page === "attendance" && <RoleAttendance user={user} />}{" "}

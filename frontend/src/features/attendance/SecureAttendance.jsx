@@ -439,6 +439,15 @@ function StudentAttendance() {
             setMessage(result.message);
             setPending(null);
             setFaceFailed(false);
+            window.dispatchEvent(
+              new CustomEvent("classmark:navigate", {
+                detail: {
+                  page: "classes",
+                  classroomId: result.classroomId,
+                  tab: "marks",
+                },
+              }),
+            );
           }}
         />
         <div className="manual-review-action">
