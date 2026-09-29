@@ -1,0 +1,9 @@
+.user > span {
+  overflow: hidden;
+}
+
+.user > span img {
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
