@@ -86,7 +86,7 @@ export default function NotificationCenter() {
                   className={item.readAt ? "" : "unread"}
                   onClick={() => openItem(item)}
                 >
-                  <i data-type={item.type} />
+                  {!item.readAt && <i data-type={item.type} />}
                   <span>
                     <b>{item.title}</b>
                     <small>{item.message}</small>

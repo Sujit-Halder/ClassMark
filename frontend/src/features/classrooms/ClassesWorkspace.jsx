@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { BookOpen, Plus, Users } from "lucide-react";
+import {
+  Archive,
+  BookOpen,
+  Plus,
+  RotateCcw,
+  Trash2,
+  Users,
+} from "lucide-react";
 import ClassroomPage from "./ClassroomPage.jsx";
 
 const API = import.meta.env.VITE_API_URL || "/api";
@@ -19,6 +26,7 @@ export default function ClassesWorkspace({
   navigation,
 }) {
   const [rooms, setRooms] = useState([]);
+  const [archivedRooms, setArchivedRooms] = useState([]);
   const [selectedId, setSelectedId] = useState(
     () => navigation?.classroomId || "",
   );
@@ -26,8 +34,11 @@ export default function ClassesWorkspace({
   const [code, setCode] = useState("");
 
   function load() {
-    api("/classrooms")
-      .then(setRooms)
+    Promise.all([api("/classrooms"), api("/classrooms?archived=true")])
+      .then(([active, archived]) => {
+        setRooms(active);
+        setArchivedRooms(archived);
+      })
       .catch((issue) => setError(issue.message));
   }
   useEffect(load, [refresh]);
@@ -47,6 +58,33 @@ export default function ClassesWorkspace({
       const data = await response.json();
       if (!response.ok) throw Error(data.message);
       setCode("");
+      setError("");
+      load();
+    } catch (issue) {
+      setError(issue.message);
+    }
+  }
+
+  async function archivedAction(room, action) {
+    const deleting = action === "delete";
+    if (
+      !window.confirm(
+        deleting
+          ? `Permanently delete “${room.name}”? This cannot be undone.`
+          : `Restore “${room.name}” to active classrooms?`,
+      )
+    )
+      return;
+    try {
+      const response = await fetch(
+        `${API}/classrooms/${room.id}${deleting ? "" : "/restore"}`,
+        {
+          method: deleting ? "DELETE" : "PATCH",
+          headers: { Authorization: `Bearer ${localStorage.token}` },
+        },
+      );
+      const body = await response.json();
+      if (!response.ok) throw Error(body.message);
       setError("");
       load();
     } catch (issue) {
@@ -142,6 +180,53 @@ export default function ClassesWorkspace({
               ? "Create your first classroom to begin."
               : "Enter a valid classroom code above to join."}
           </p>
+        </section>
+      )}
+      {archivedRooms.length > 0 && (
+        <section className="archived-classrooms panel">
+          <header>
+            <Archive />
+            <div>
+              <h2>Archived classrooms</h2>
+              <p>
+                Hidden from active classes and available here for reference or
+                restoration.
+              </p>
+            </div>
+          </header>
+          <div>
+            {archivedRooms.map((room) => (
+              <article key={room.id}>
+                <span style={{ background: room.color }}>
+                  <BookOpen />
+                </span>
+                <div>
+                  <b>{room.name}</b>
+                  <small>
+                    {room.subject} · {room.section || "No section"}
+                  </small>
+                </div>
+                {room.classroomRole === "owner" && (
+                  <div className="archived-actions">
+                    <button
+                      className="outline"
+                      onClick={() => archivedAction(room, "restore")}
+                    >
+                      <RotateCcw />
+                      Restore
+                    </button>
+                    <button
+                      className="danger"
+                      onClick={() => archivedAction(room, "delete")}
+                    >
+                      <Trash2 />
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
         </section>
       )}
     </>

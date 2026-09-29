@@ -8,6 +8,7 @@ import FaceWorkspace from "./features/faces/FaceWorkspace.jsx";
 import SettingsWorkspace from "./features/settings/SettingsWorkspace.jsx";
 import NotificationCenter from "./features/notifications/NotificationCenter.jsx";
 import SecureAttendance from "./features/attendance/SecureAttendance.jsx";
+import PeopleWorkspace from "./features/people/PeopleWorkspace.jsx";
 import { applyAppearance, watchSystemAppearance } from "./lib/appearance.js";
 import "./styles/functional.css";
 import "./styles/session.css";
@@ -556,10 +557,17 @@ const Mark = () => (
 );
 function RealHome({ setPage, modal, user }) {
   const [rooms, setRooms] = useState([]),
+    [overview, setOverview] = useState({
+      attendanceRecords: 0,
+      sessionsToday: 0,
+    }),
     [loading, setLoading] = useState(true);
   useEffect(() => {
-    api("/classrooms")
-      .then(setRooms)
+    Promise.all([api("/classrooms"), api("/overview")])
+      .then(([classrooms, summary]) => {
+        setRooms(classrooms);
+        setOverview(summary);
+      })
       .catch(() => setRooms([]))
       .finally(() => setLoading(false));
   }, []);
@@ -597,15 +605,19 @@ function RealHome({ setPage, modal, user }) {
         <Stat
           I={Check}
           label="Attendance records"
-          value="—"
-          note="Available after a session"
+          value={overview.attendanceRecords}
+          note={
+            user.role === "teacher"
+              ? "Student results recorded"
+              : "Your recorded results"
+          }
           tone="green"
         />
         <Stat
           I={CalendarDays}
-          label="Classes today"
-          value="0"
-          note="No schedule configured"
+          label="Sessions today"
+          value={overview.sessionsToday}
+          note="Attendance sessions started today"
           tone="blue"
         />
       </div>
@@ -1705,13 +1717,7 @@ export default function App() {
           )}{" "}
           {page === "attendance" && <RoleAttendance user={user} />}{" "}
           {page === "face" && <FaceWorkspace user={user} Title={Title} />}{" "}
-          {page === "people" && user.role === "teacher" && (
-            <Title
-              over="DIRECTORY"
-              title="People"
-              text="Open a classroom to manage its roster."
-            />
-          )}{" "}
+          {page === "people" && user.role === "teacher" && <PeopleWorkspace />}{" "}
           {page === "settings" && <SettingsView user={user} />}
         </main>
       </div>

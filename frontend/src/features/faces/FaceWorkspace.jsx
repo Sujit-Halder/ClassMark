@@ -161,6 +161,7 @@ export default function FaceWorkspace({ user, Title, onEnrolled }) {
       setMessage(result.message);
       setEnrollment(null);
       await load();
+      window.dispatchEvent(new Event("profile-picture-updated"));
       onEnrolled?.();
     } catch (error) {
       setMessage(error.message);

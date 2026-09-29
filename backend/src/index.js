@@ -23,7 +23,15 @@ import {
 
 const port = Number(process.env.PORT || 4000),
   secret = process.env.JWT_SECRET || "development-only-secret-change-me",
-  appUrl = process.env.APP_URL || "http://localhost:5173";
+  appUrl = process.env.APP_URL || "http://localhost:5173",
+  notificationRetentionDays = Math.max(
+    1,
+    Number(process.env.NOTIFICATION_RETENTION_DAYS) || 90,
+  ),
+  notificationReadLimit = Math.max(
+    25,
+    Number(process.env.NOTIFICATION_READ_LIMIT) || 200,
+  );
 const frontendDist = join(
   dirname(dirname(dirname(fileURLToPath(import.meta.url)))),
   "frontend",
@@ -54,6 +62,15 @@ const publicUser = (u) =>
     createdAt: u.created_at,
     hasProfilePicture: Boolean(u.profile_picture),
   };
+function saveProfilePictureIfMissing(userId, image, imageType = "image/jpeg") {
+  if (!image?.length || image.length > 2_000_000) return false;
+  const result = db
+    .prepare(
+      "UPDATE users SET profile_picture=?,profile_picture_type=? WHERE id=? AND profile_picture IS NULL",
+    )
+    .run(image, imageType, userId);
+  return Boolean(result.changes);
+}
 const tokenFor = (u) =>
   jwt.sign({ sub: u.id, role: u.role }, secret, { expiresIn: "7d" });
 function auth(req, res, next) {
@@ -184,6 +201,22 @@ function notifyUser(userId, type, title, message, link = "/", force = false) {
     link,
     notification.createdAt,
   );
+}
+function cleanupReadNotifications() {
+  const cutoff = new Date(
+    Date.now() - notificationRetentionDays * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const expired = db
+    .prepare(
+      "DELETE FROM notifications WHERE read_at IS NOT NULL AND created_at<?",
+    )
+    .run(cutoff).changes;
+  const overLimit = db
+    .prepare(
+      `DELETE FROM notifications AS old WHERE old.read_at IS NOT NULL AND old.id NOT IN (SELECT recent.id FROM notifications AS recent WHERE recent.user_id=old.user_id AND recent.read_at IS NOT NULL ORDER BY recent.created_at DESC LIMIT ?)`,
+    )
+    .run(notificationReadLimit).changes;
+  return Number(expired) + Number(overLimit);
 }
 function classroomRecipients(classroomId, excludeUserId) {
   return db
@@ -664,6 +697,30 @@ app.put("/api/settings", auth, (req, res) => {
   });
 });
 app.get("/api/notifications", auth, (req, res) => {
+  const linked = db
+    .prepare("SELECT id,link FROM notifications WHERE user_id=? AND link IS NOT NULL")
+    .all(req.auth.sub);
+  for (const item of linked) {
+    const classroomId = item.link.match(/[?&]classroomId=([^&]+)/)?.[1];
+    if (classroomId) {
+      const room = db
+        .prepare("SELECT archived_at FROM classrooms WHERE id=?")
+        .get(decodeURIComponent(classroomId));
+      if (!room || room.archived_at)
+        db.prepare(
+          "UPDATE notifications SET link=NULL,message=message||? WHERE id=?",
+        ).run(room ? " (Classroom archived.)" : " (Classroom deleted.)", item.id);
+      continue;
+    }
+    const invitationToken = item.link.match(/\/invite\/([^/?#]+)/)?.[1];
+    if (
+      invitationToken &&
+      !db.prepare("SELECT 1 FROM invitations WHERE token=?").get(invitationToken)
+    )
+      db.prepare(
+        "UPDATE notifications SET link=NULL,message=message||' (Invitation is no longer available.)' WHERE id=?",
+      ).run(item.id);
+  }
   const items = db
       .prepare(
         "SELECT id,type,title,message,link,read_at readAt,created_at createdAt FROM notifications WHERE user_id=? ORDER BY created_at DESC",
@@ -729,15 +786,60 @@ app.put("/api/account/password", auth, (req, res) => {
   res.json({ ok: true, message: "Password changed successfully." });
 });
 app.get("/api/classrooms", auth, (req, res) => {
+  const archived = req.query.archived === "true";
   const sql =
     req.auth.role === "teacher"
-      ? `SELECT DISTINCT c.*,(SELECT COUNT(*) FROM memberships m WHERE m.classroom_id=c.id) memberCount,CASE WHEN c.teacher_id=? THEN 'owner' ELSE 'teacher' END classroomRole FROM classrooms c LEFT JOIN classroom_teachers ct ON ct.classroom_id=c.id WHERE (c.teacher_id=? OR ct.teacher_id=?) AND c.archived_at IS NULL`
-      : `SELECT c.id,c.teacher_id,c.name,c.subject,c.section,c.color,c.created_at,(SELECT COUNT(*) FROM memberships x WHERE x.classroom_id=c.id) memberCount,'student' classroomRole FROM classrooms c JOIN memberships m ON m.classroom_id=c.id WHERE m.user_id=? AND c.archived_at IS NULL`;
+      ? `SELECT DISTINCT c.*,(SELECT COUNT(*) FROM memberships m WHERE m.classroom_id=c.id) memberCount,CASE WHEN c.teacher_id=? THEN 'owner' ELSE 'teacher' END classroomRole FROM classrooms c LEFT JOIN classroom_teachers ct ON ct.classroom_id=c.id WHERE (c.teacher_id=? OR ct.teacher_id=?) AND c.archived_at IS ${archived ? "NOT NULL" : "NULL"}`
+      : `SELECT c.id,c.teacher_id,c.name,c.subject,c.section,c.color,c.created_at,c.archived_at,(SELECT COUNT(*) FROM memberships x WHERE x.classroom_id=c.id) memberCount,'student' classroomRole FROM classrooms c JOIN memberships m ON m.classroom_id=c.id WHERE m.user_id=? AND c.archived_at IS ${archived ? "NOT NULL" : "NULL"}`;
   res.json(
     req.auth.role === "teacher"
       ? db.prepare(sql).all(req.auth.sub, req.auth.sub, req.auth.sub)
       : db.prepare(sql).all(req.auth.sub),
   );
+});
+app.patch("/api/classrooms/:id/restore", auth, (req, res) => {
+  const room = db
+    .prepare("SELECT * FROM classrooms WHERE id=? AND teacher_id=?")
+    .get(req.params.id, req.auth.sub);
+  if (!room)
+    return res
+      .status(403)
+      .json({ message: "Only the classroom owner can restore it." });
+  db.prepare("UPDATE classrooms SET archived_at=NULL WHERE id=?").run(room.id);
+  res.json({ ok: true, message: "Classroom restored." });
+});
+app.get("/api/people", auth, (req, res) => {
+  if (req.auth.role !== "teacher")
+    return res.status(403).json({ message: "Teacher access is required." });
+  const classrooms = db
+    .prepare(
+      `SELECT DISTINCT c.id,c.name,c.subject FROM classrooms c LEFT JOIN classroom_teachers ct ON ct.classroom_id=c.id WHERE (c.teacher_id=? OR ct.teacher_id=?) AND c.archived_at IS NULL ORDER BY c.name`,
+    )
+    .all(req.auth.sub, req.auth.sub);
+  const people = db
+    .prepare(
+      `SELECT u.id,u.name,u.email,u.role,u.department,u.identifier,COUNT(DISTINCT access.classroom_id) classroomCount,GROUP_CONCAT(DISTINCT c.name) classroomNames FROM users u JOIN (SELECT m.user_id,m.classroom_id FROM memberships m UNION SELECT ct.teacher_id user_id,ct.classroom_id FROM classroom_teachers ct UNION SELECT owner.teacher_id user_id,owner.id classroom_id FROM classrooms owner) access ON access.user_id=u.id JOIN classrooms c ON c.id=access.classroom_id LEFT JOIN classroom_teachers mine ON mine.classroom_id=c.id WHERE (c.teacher_id=? OR mine.teacher_id=?) AND c.archived_at IS NULL GROUP BY u.id ORDER BY u.role DESC,u.name`,
+    )
+    .all(req.auth.sub, req.auth.sub);
+  res.json({ classrooms, people });
+});
+app.get("/api/overview", auth, (req, res) => {
+  const teacher = req.auth.role === "teacher";
+  const access = teacher
+    ? "(c.teacher_id=? OR EXISTS(SELECT 1 FROM classroom_teachers ct WHERE ct.classroom_id=c.id AND ct.teacher_id=?))"
+    : "EXISTS(SELECT 1 FROM memberships m WHERE m.classroom_id=c.id AND m.user_id=?)";
+  const params = teacher ? [req.auth.sub, req.auth.sub] : [req.auth.sub];
+  const attendanceRecords = db
+    .prepare(
+      `SELECT COUNT(*) count FROM attendance_records a JOIN classrooms c ON c.id=a.classroom_id WHERE ${access}${teacher ? " AND a.user_id<>c.teacher_id" : " AND a.user_id=?"}`,
+    )
+    .get(...params, ...(teacher ? [] : [req.auth.sub])).count;
+  const sessionsToday = db
+    .prepare(
+      `SELECT COUNT(*) count FROM attendance_sessions s JOIN classrooms c ON c.id=s.classroom_id WHERE ${access} AND date(s.starts_at)=date('now')`,
+    )
+    .get(...params).count;
+  res.json({ attendanceRecords, sessionsToday });
 });
 app.get("/api/classrooms/:id", auth, (req, res) => {
   const room = db
@@ -892,6 +994,9 @@ app.patch("/api/classrooms/:id/archive", auth, (req, res) => {
     now(),
     room.id,
   );
+  db.prepare(
+    "UPDATE notifications SET link=NULL,message=message||' (Classroom archived.)' WHERE link LIKE ?",
+  ).run(`%classroomId=${room.id}%`);
   res.json({ ok: true });
 });
 app.delete("/api/classrooms/:id", auth, (req, res) => {
@@ -902,7 +1007,19 @@ app.delete("/api/classrooms/:id", auth, (req, res) => {
     return res
       .status(403)
       .json({ message: "Only the classroom owner can delete it." });
-  db.prepare("DELETE FROM classrooms WHERE id=?").run(room.id);
+  const invitationTokens = db
+    .prepare("SELECT token FROM invitations WHERE classroom_id=?")
+    .all(room.id);
+  transaction(() => {
+    db.prepare(
+      "UPDATE notifications SET link=NULL,message=message||' (Classroom deleted.)' WHERE link LIKE ?",
+    ).run(`%classroomId=${room.id}%`);
+    for (const invitation of invitationTokens)
+      db.prepare(
+        "UPDATE notifications SET link=NULL,message=message||' (Classroom deleted.)' WHERE link LIKE ?",
+      ).run(`%/invite/${invitation.token}%`);
+    db.prepare("DELETE FROM classrooms WHERE id=?").run(room.id);
+  });
   res.json({ ok: true });
 });
 app.get("/api/classrooms/:id/posts", auth, (req, res) => {
@@ -1619,7 +1736,11 @@ app.post("/api/faces/authenticate", auth, async (req, res) => {
           message:
             "Your face could not be confirmed. Face the camera directly and try again, or request teacher review after QR verification.",
         });
-    const at = now();
+    const at = now(),
+      profilePictureSaved = saveProfilePictureIfMissing(
+        req.auth.sub,
+        bytes,
+      );
     if (req.body.purpose === "create-attendance") {
       if (req.auth.role !== "teacher")
         return res
@@ -1636,6 +1757,7 @@ app.post("/api/faces/authenticate", auth, async (req, res) => {
         verified: true,
         faceGrantId: grant.id,
         expiresAt: grant.expiresAt,
+        profilePictureSaved,
         message: "Identity confirmed. You may generate the QR code now.",
       });
     }
@@ -1675,6 +1797,7 @@ app.post("/api/faces/authenticate", auth, async (req, res) => {
         verified: true,
         decision: "complete",
         classroomId: session.classroom_id,
+        profilePictureSaved,
         message: "Attendance complete. QR, location, and face were verified.",
       });
     }
@@ -1986,15 +2109,7 @@ app.post("/api/faces/liveness/complete", auth, async (req, res) => {
       db.prepare(
         "UPDATE face_enrollment_sessions SET status='succeeded',completed_at=? WHERE id=?",
       ).run(at, enrollment.id);
-      if (referenceImage?.length && referenceImage.length <= 2 * 1024 * 1024) {
-        const existingPicture = db
-          .prepare("SELECT profile_picture FROM users WHERE id=?")
-          .get(req.auth.sub);
-        if (!existingPicture?.profile_picture)
-          db.prepare(
-            "UPDATE users SET profile_picture=?,profile_picture_type='image/jpeg' WHERE id=?",
-          ).run(referenceImage, req.auth.sub);
-      }
+      saveProfilePictureIfMissing(req.auth.sub, referenceImage);
     });
     res.json({
       verified: true,
@@ -2090,6 +2205,9 @@ app.use((error, _req, res, next) => {
 const attendanceFinalizer = setInterval(finalizeExpiredAttendanceSessions, 15_000);
 attendanceFinalizer.unref();
 finalizeExpiredAttendanceSessions();
+const notificationCleanup = setInterval(cleanupReadNotifications, 6 * 60 * 60_000);
+notificationCleanup.unref();
+cleanupReadNotifications();
 
 app.listen(port, "0.0.0.0", () =>
   console.log(

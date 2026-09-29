@@ -79,6 +79,8 @@ function FaceCapture({ title, text, onVerified, purpose, sessionId }) {
         method: "POST",
         body: JSON.stringify({ image, purpose, sessionId }),
       });
+      if (result.profilePictureSaved)
+        window.dispatchEvent(new Event("profile-picture-updated"));
       setMessage(result.message);
       onVerified(result);
     } catch (error) {

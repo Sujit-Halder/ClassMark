@@ -158,7 +158,7 @@ npm run lint      # frontend checks
 4. The student then captures a front-camera image that must match their own enrolled Rekognition identity.
 5. Attendance is complete only after QR, location, and face verification all pass. QR/location without face is retained as a partial record, not present attendance.
 6. If face authentication cannot be completed, the student can request manual verification. Classroom teachers receive an in-app notification and can approve or reject the request in the attendance page.
-7. In-app notifications are stored in SQLite with no unread-count limit. Users can mark individual notifications or all notifications as read.
+7. In-app notifications have no unread-count limit. Unread items remain until viewed; read items are retained for 90 days with at most 200 recent read notifications per user by default. Both limits are configurable in `backend/.env`.
 
 ## Fresh EC2 installation
 
