@@ -111,6 +111,55 @@ if (!postColumns.includes('post_type')) db.exec("ALTER TABLE classroom_posts ADD
 if (!postColumns.includes('reference_id')) db.exec('ALTER TABLE classroom_posts ADD COLUMN reference_id TEXT')
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_enrollment_id ON users(identifier) WHERE identifier <> ''; CREATE INDEX IF NOT EXISTS idx_resources_classroom ON classroom_resources(classroom_id,created_at);")
 
+const faceProfileColumns = db.prepare('PRAGMA table_info(face_profiles)').all().map((column) => column.name)
+for (const [name, definition] of [
+  ['provider', "TEXT NOT NULL DEFAULT 'local'"],
+  ['collection_id', 'TEXT'],
+  ['provider_user_id', 'TEXT'],
+  ['face_ids', "TEXT NOT NULL DEFAULT '[]'"],
+  ['consent_at', 'TEXT'],
+  ['last_verified_at', 'TEXT'],
+  ['revoked_at', 'TEXT'],
+]) if (!faceProfileColumns.includes(name)) db.exec(`ALTER TABLE face_profiles ADD COLUMN ${name} ${definition}`)
+
+const attendanceRecordColumns = db.prepare('PRAGMA table_info(attendance_records)').all().map((column) => column.name)
+for (const [name, definition] of [
+  ['qr_verified_at', 'TEXT'],
+  ['face_verified_at', 'TEXT'],
+  ['face_event_id', 'TEXT'],
+  ['decision_reason', "TEXT NOT NULL DEFAULT ''"],
+]) if (!attendanceRecordColumns.includes(name)) db.exec(`ALTER TABLE attendance_records ADD COLUMN ${name} ${definition}`)
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS face_enrollment_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    aws_session_id TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL CHECK(status IN ('created','processing','succeeded','failed','expired')),
+    consent_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    completed_at TEXT
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS face_events (
+    id TEXT PRIMARY KEY,
+    classroom_id TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    session_id TEXT REFERENCES attendance_sessions(id) ON DELETE CASCADE,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    captured_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    camera_label TEXT NOT NULL DEFAULT 'mobile-camera',
+    confidence REAL,
+    status TEXT NOT NULL CHECK(status IN ('matched','review','unmatched','rejected')),
+    reason TEXT NOT NULL DEFAULT '',
+    captured_at TEXT NOT NULL,
+    reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    reviewed_at TEXT
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS idx_face_sessions_user ON face_enrollment_sessions(user_id,created_at);
+  CREATE INDEX IF NOT EXISTS idx_face_events_session ON face_events(session_id,captured_at);
+  CREATE INDEX IF NOT EXISTS idx_face_events_user ON face_events(user_id,captured_at);
+`)
+
 export function transaction(work) {
   db.exec('BEGIN IMMEDIATE')
   try { const result = work(); db.exec('COMMIT'); return result }
