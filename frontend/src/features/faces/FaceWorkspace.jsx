@@ -23,7 +23,14 @@ async function api(path, options = {}) {
   return data;
 }
 
-function LivenessCheck({ enrollment, onComplete, onCancel }) {
+export function LivenessCheck({
+  enrollment,
+  onComplete,
+  onCancel,
+  over = "LIVE ENROLLMENT",
+  title = "Quick live face check",
+  text = "Use the front camera, keep your face visible, and move closer when prompted.",
+}) {
   const [Detector, setDetector] = useState(null),
     [error, setError] = useState("");
   useEffect(() => {
@@ -69,12 +76,9 @@ function LivenessCheck({ enrollment, onComplete, onCancel }) {
     <section className="panel liveness-panel">
       <div className="biometric-heading">
         <div>
-          <small>LIVE ENROLLMENT</small>
-          <h2>Quick live face check</h2>
-          <p>
-            Use the front camera, keep your face visible, and move closer when
-            prompted.
-          </p>
+          <small>{over}</small>
+          <h2>{title}</h2>
+          <p>{text}</p>
         </div>
         <button className="outline" onClick={onCancel}>
           Cancel

@@ -1710,15 +1710,231 @@ function faceImageBytes(image) {
     throw new Error("Face image must be between 1 byte and 5 MB.");
   return bytes;
 }
-app.post("/api/faces/authenticate", auth, async (req, res) => {
+app.post("/api/faces/authentication/session", auth, async (req, res) => {
+  if (!faceConfig.backendConfigured || !faceConfig.browserConfigured)
+    return res.status(503).json({
+      message:
+        "AWS live face authentication is not fully configured on the server.",
+    });
   if (!hasVerifiedFace(req.auth.sub))
-    return res
-      .status(403)
-      .json({
-        message:
-          "Complete your first-time face enrollment before authenticating.",
+    return res.status(403).json({
+      message: "Complete first-time face enrollment before authenticating.",
+    });
+  const purpose = req.body.purpose;
+  if (purpose === "create-attendance" && req.auth.role !== "teacher")
+    return res.status(403).json({ message: "Teacher access is required." });
+  if (purpose === "attendance") {
+    if (req.auth.role !== "student")
+      return res.status(403).json({ message: "Student access is required." });
+    const attendanceSession = db
+        .prepare("SELECT * FROM attendance_sessions WHERE id=?")
+        .get(req.body.attendanceSessionId),
+      record =
+        attendanceSession &&
+        db
+          .prepare(
+            "SELECT * FROM attendance_records WHERE session_id=? AND user_id=?",
+          )
+          .get(attendanceSession.id, req.auth.sub);
+    if (
+      !attendanceSession ||
+      attendanceSession.finalized_at ||
+      new Date(attendanceSession.expires_at) < new Date()
+    )
+      return res
+        .status(409)
+        .json({ message: "This attendance session is no longer active." });
+    if (!record?.qr_verified_at)
+      return res.status(403).json({
+        message: "QR and location verification must be completed first.",
       });
+  } else if (purpose !== "create-attendance") {
+    return res.status(400).json({ message: "Invalid authentication purpose." });
+  }
+  try {
+    const created = await createLivenessSession(randomUUID()),
+      createdAt = now(),
+      expiresAt = new Date(Date.now() + 3 * 60_000).toISOString();
+    db.prepare(
+      "INSERT INTO face_verification_sessions(id,user_id,aws_session_id,purpose,attendance_session_id,status,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)",
+    ).run(
+      randomUUID(),
+      req.auth.sub,
+      created.SessionId,
+      purpose,
+      req.body.attendanceSessionId || null,
+      "created",
+      createdAt,
+      expiresAt,
+    );
+    res.status(201).json({
+      sessionId: created.SessionId,
+      region: faceConfig.region,
+      identityPoolId: faceConfig.identityPoolId,
+      challengeMode:
+        faceConfig.livenessChallenge === "FaceMovementChallenge"
+          ? "movement"
+          : "movement-and-light",
+      expiresAt,
+    });
+  } catch (error) {
+    console.error("[live authentication session]", error);
+    res.status(502).json({
+      message: `AWS could not start live face authentication: ${error.message || error.name}`,
+    });
+  }
+});
+
+app.post("/api/faces/authentication/complete", auth, async (req, res) => {
+  const verification = db
+    .prepare(
+      "SELECT * FROM face_verification_sessions WHERE aws_session_id=? AND user_id=?",
+    )
+    .get(req.body.sessionId, req.auth.sub);
+  if (!verification)
+    return res
+      .status(404)
+      .json({ message: "Live authentication session was not found." });
+  if (verification.status === "succeeded")
+    return res.status(409).json({ message: "This live check was already used." });
+  if (new Date(verification.expires_at) < new Date()) {
+    db.prepare(
+      "UPDATE face_verification_sessions SET status='expired',completed_at=? WHERE id=?",
+    ).run(now(), verification.id);
+    return res
+      .status(410)
+      .json({ message: "The live face check expired. Start again." });
+  }
+  const identityFailure =
+    verification.purpose === "create-attendance"
+      ? "The live person was not recognized as the signed-in teacher. Try again with your full face clearly visible."
+      : "The live person was not recognized as the signed-in student. Try again, or request teacher review.";
+  try {
+    db.prepare(
+      "UPDATE face_verification_sessions SET status='processing' WHERE id=?",
+    ).run(verification.id);
+    const liveness = await getLivenessResult(verification.aws_session_id),
+      livenessConfidence = Number(liveness.Confidence || 0),
+      referenceImage = liveness.ReferenceImage?.Bytes
+        ? Buffer.from(liveness.ReferenceImage.Bytes)
+        : null;
+    if (
+      liveness.Status !== "SUCCEEDED" ||
+      livenessConfidence < faceConfig.livenessThreshold ||
+      !referenceImage?.length
+    ) {
+      db.prepare(
+        "UPDATE face_verification_sessions SET status='failed',completed_at=? WHERE id=?",
+      ).run(now(), verification.id);
+      return res.status(422).json({
+        message:
+          "Live person verification failed. Photos, screens, objects, partial faces, and poorly visible faces are not accepted. Use even light and follow the movement prompt.",
+      });
+    }
+    const matches = await identifyFace(referenceImage),
+      match = matches.find(
+        (item) => item.User?.UserId === providerUserId(req.auth.sub),
+      );
+    if (!match || Number(match.Similarity || 0) < faceConfig.matchThreshold) {
+      db.prepare(
+        "UPDATE face_verification_sessions SET status='failed',completed_at=? WHERE id=?",
+      ).run(now(), verification.id);
+      return res.status(422).json({ message: identityFailure });
+    }
+    const completedAt = now(),
+      profilePictureSaved = saveProfilePictureIfMissing(
+        req.auth.sub,
+        referenceImage,
+      );
+    if (verification.purpose === "create-attendance") {
+      const grant = {
+        id: randomUUID(),
+        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      };
+      transaction(() => {
+        db.prepare(
+          "INSERT INTO face_auth_grants(id,user_id,purpose,created_at,expires_at) VALUES(?,?,?,?,?)",
+        ).run(
+          grant.id,
+          req.auth.sub,
+          "create-attendance",
+          completedAt,
+          grant.expiresAt,
+        );
+        db.prepare(
+          "UPDATE face_verification_sessions SET status='succeeded',completed_at=? WHERE id=?",
+        ).run(completedAt, verification.id);
+      });
+      return res.json({
+        verified: true,
+        faceGrantId: grant.id,
+        expiresAt: grant.expiresAt,
+        livenessConfidence,
+        matchConfidence: Number(match.Similarity || 0),
+        profilePictureSaved,
+        message: "Live teacher identity confirmed. You may generate the QR code.",
+      });
+    }
+    const attendanceSession = db
+        .prepare("SELECT * FROM attendance_sessions WHERE id=?")
+        .get(verification.attendance_session_id),
+      record =
+        attendanceSession &&
+        db
+          .prepare(
+            "SELECT * FROM attendance_records WHERE session_id=? AND user_id=?",
+          )
+          .get(attendanceSession.id, req.auth.sub);
+    if (
+      !attendanceSession ||
+      attendanceSession.finalized_at ||
+      new Date(attendanceSession.expires_at) < new Date() ||
+      !record?.qr_verified_at
+    )
+      return res.status(409).json({
+        message: "The QR attendance session ended before face verification.",
+      });
+    transaction(() => {
+      db.prepare(
+        "UPDATE attendance_records SET method='qr+face+liveness',face_verified_at=?,status='present',decision_reason='QR, location, AWS liveness, and identity match verified.' WHERE id=?",
+      ).run(completedAt, record.id);
+      db.prepare(
+        "UPDATE face_verification_sessions SET status='succeeded',completed_at=? WHERE id=?",
+      ).run(completedAt, verification.id);
+    });
+    return res.json({
+      verified: true,
+      decision: "complete",
+      classroomId: attendanceSession.classroom_id,
+      livenessConfidence,
+      matchConfidence: Number(match.Similarity || 0),
+      profilePictureSaved,
+      message:
+        "Attendance complete. QR, location, live-person check, and identity were verified.",
+    });
+  } catch (error) {
+    db.prepare(
+      "UPDATE face_verification_sessions SET status='failed',completed_at=? WHERE id=?",
+    ).run(now(), verification.id);
+    console.error("[live authentication complete]", error);
+    res.status(502).json({
+      message: `AWS could not complete live authentication: ${error.message || error.name}`,
+    });
+  }
+});
+
+app.post("/api/faces/authenticate", auth, async (req, res) => {
+  return res.status(410).json({
+    message:
+      "Still-image authentication has been disabled. Complete the AWS live face check instead.",
+  });
+  /* c8 ignore start */
+  // eslint-disable-next-line no-unreachable
   let bytes;
+  const noMatchMessage =
+    req.body.purpose === "create-attendance"
+      ? "Teacher identity could not be confirmed. Show your own face clearly to the front camera and try again before generating the QR code."
+      : "Student identity could not be confirmed. Show your own face clearly to the front camera and try again. If verification continues to fail after QR and location approval, request manual review from your teacher.";
   try {
     bytes = faceImageBytes(req.body.image);
   } catch (error) {
@@ -1732,10 +1948,7 @@ app.post("/api/faces/authenticate", auth, async (req, res) => {
     if (!match)
       return res
         .status(422)
-        .json({
-          message:
-            "Your face could not be confirmed. Face the camera directly and try again, or request teacher review after QR verification.",
-        });
+        .json({ message: noMatchMessage });
     const at = now(),
       profilePictureSaved = saveProfilePictureIfMissing(
         req.auth.sub,
@@ -1806,12 +2019,15 @@ app.post("/api/faces/authenticate", auth, async (req, res) => {
       .json({ message: "Unknown face authentication purpose." });
   } catch (error) {
     console.error("[self face authentication]", error);
+    if (error.name === "InvalidParameterException")
+      return res.status(422).json({ message: noMatchMessage });
     res
       .status(502)
       .json({
         message: `Face authentication service failed: ${error.message || error.name}`,
       });
   }
+  /* c8 ignore stop */
 });
 app.post("/api/attendance/review-requests", auth, (req, res) => {
   if (req.auth.role !== "student")

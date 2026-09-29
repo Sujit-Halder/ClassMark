@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import QrCameraScanner from "./QrCameraScanner.jsx";
+import { LivenessCheck } from "../faces/FaceWorkspace.jsx";
 import { getReliableLocation } from "../../lib/location.js";
 import "../../styles/secure-attendance.css";
 
@@ -28,6 +29,8 @@ async function api(path, options = {}) {
   return data;
 }
 
+// Kept temporarily as a migration fallback; the server rejects this legacy flow.
+// eslint-disable-next-line no-unused-vars
 function FaceCapture({ title, text, onVerified, purpose, sessionId }) {
   const video = useRef(null),
     canvas = useRef(null),
@@ -146,6 +149,82 @@ function FaceCapture({ title, text, onVerified, purpose, sessionId }) {
   );
 }
 
+function LiveFaceAuthentication({
+  title,
+  text,
+  onVerified,
+  purpose,
+  sessionId,
+}) {
+  const [liveness, setLiveness] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  async function begin() {
+    setBusy(true);
+    setMessage("Starting secure live-person verification…");
+    try {
+      setLiveness(
+        await api("/faces/authentication/session", {
+          method: "POST",
+          body: JSON.stringify({
+            purpose,
+            attendanceSessionId: sessionId || null,
+          }),
+        }),
+      );
+      setMessage("");
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function complete() {
+    setBusy(true);
+    setMessage("Checking liveness and matching your identity…");
+    try {
+      const result = await api("/faces/authentication/complete", {
+        method: "POST",
+        body: JSON.stringify({ sessionId: liveness.sessionId }),
+      });
+      if (result.profilePictureSaved)
+        window.dispatchEvent(new Event("profile-picture-updated"));
+      setLiveness(null);
+      setMessage(result.message);
+      onVerified(result);
+    } catch (error) {
+      setLiveness(null);
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (liveness)
+    return (
+      <LivenessCheck
+        enrollment={liveness}
+        onComplete={complete}
+        onCancel={() => setLiveness(null)}
+        over="LIVE IDENTITY CHECK"
+        title={title}
+        text={text}
+      />
+    );
+  return (
+    <section className="panel self-face live-auth-start">
+      <div className="secure-heading">
+        <span><ShieldCheck /></span>
+        <div><small>ANTI-SPOOF FACE AUTHENTICATION</small><h2>{title}</h2><p>{text}</p></div>
+      </div>
+      <p className="liveness-requirement">A still photo, screen image, object, partial face, or obscured face will not be accepted.</p>
+      <button className="primary wide" onClick={begin} disabled={busy}>
+        <ScanFace />{busy ? "Starting…" : "Start live face check"}
+      </button>
+      {message && <p className="status-message">{message}</p>}
+    </section>
+  );
+}
+
 function TeacherAttendance() {
   const [rooms, setRooms] = useState([]),
     [roomId, setRoomId] = useState(""),
@@ -231,7 +310,7 @@ function TeacherAttendance() {
             be generated.
           </p>
         </div>
-        <FaceCapture
+        <LiveFaceAuthentication
           purpose="create-attendance"
           title="Confirm teacher identity"
           text="Capture a clear live-facing image. Authorization remains valid for five minutes and can create one QR session."
@@ -432,7 +511,7 @@ function StudentAttendance() {
             until your face or a teacher verifies it.
           </p>
         </div>
-        <FaceCapture
+        <LiveFaceAuthentication
           purpose="attendance"
           sessionId={pending.sessionId}
           title="Confirm your identity"

@@ -13,9 +13,9 @@ import {
 const region = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1'
 const collectionId = process.env.REKOGNITION_COLLECTION_ID || ''
 const identityPoolId = process.env.COGNITO_IDENTITY_POOL_ID || ''
-const livenessThreshold = Math.min(100, Math.max(0, Number(process.env.FACE_LIVENESS_THRESHOLD || 60)))
+const livenessThreshold = Math.min(99, Math.max(80, Number(process.env.FACE_LIVENESS_THRESHOLD || 80)))
 const livenessChallenge = process.env.FACE_LIVENESS_CHALLENGE === 'movement-and-light' ? 'FaceMovementAndLightChallenge' : 'FaceMovementChallenge'
-const matchThreshold = Math.min(100, Math.max(0, Number(process.env.FACE_MATCH_THRESHOLD || 92)))
+const matchThreshold = Math.min(90, Math.max(80, Number(process.env.FACE_MATCH_THRESHOLD || 88)))
 const ambiguityMargin = Math.min(20, Math.max(0, Number(process.env.FACE_AMBIGUITY_MARGIN || 3)))
 const client = new RekognitionClient({ region })
 

@@ -159,6 +159,15 @@ db.exec(`
     purpose TEXT NOT NULL CHECK(purpose IN ('create-attendance')),
     created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT
   ) STRICT;
+  CREATE TABLE IF NOT EXISTS face_verification_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    aws_session_id TEXT NOT NULL UNIQUE,
+    purpose TEXT NOT NULL CHECK(purpose IN ('create-attendance','attendance')),
+    attendance_session_id TEXT REFERENCES attendance_sessions(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK(status IN ('created','processing','succeeded','failed','expired')),
+    created_at TEXT NOT NULL, expires_at TEXT NOT NULL, completed_at TEXT
+  ) STRICT;
   CREATE TABLE IF NOT EXISTS attendance_review_requests (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES attendance_sessions(id) ON DELETE CASCADE,
@@ -172,6 +181,7 @@ db.exec(`
   ) STRICT;
   CREATE INDEX IF NOT EXISTS idx_face_sessions_user ON face_enrollment_sessions(user_id,created_at);
   CREATE INDEX IF NOT EXISTS idx_face_auth_grants_user ON face_auth_grants(user_id,expires_at);
+  CREATE INDEX IF NOT EXISTS idx_face_verification_user ON face_verification_sessions(user_id,created_at);
   CREATE INDEX IF NOT EXISTS idx_attendance_reviews_session ON attendance_review_requests(session_id,status);
 `)
 
