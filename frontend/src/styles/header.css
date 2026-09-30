@@ -16,6 +16,11 @@
   line-height: 1.2;
 }
 .top-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 9px;
   width: min(410px, 34vw) !important;
   height: 44px;
   margin-left: auto !important;
@@ -26,6 +31,85 @@
     border-color 0.2s,
     box-shadow 0.2s,
     background 0.2s;
+}
+.top-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+.search-results {
+  position: absolute;
+  top: calc(100% + 9px);
+  left: 0;
+  right: 0;
+  max-height: min(480px, 65vh);
+  overflow: auto;
+  padding: 7px;
+  border: 1px solid var(--line, #dfe5e2);
+  border-radius: 15px;
+  background: var(--surface, #fff);
+  box-shadow: 0 24px 65px rgba(20, 34, 29, 0.2);
+  z-index: 80;
+}
+.search-results > p {
+  margin: 0;
+  padding: 18px;
+  color: var(--muted, #738079);
+  text-align: center;
+  font-size: 12px;
+}
+.search-results > button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink, #172321);
+  text-align: left;
+}
+.search-results > button:hover,
+.search-results > button:focus-visible {
+  background: var(--surface-soft, #f4f7f5);
+}
+.search-results > button > span:nth-child(2) {
+  min-width: 0;
+  display: grid;
+}
+.search-results b,
+.search-results small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-results small,
+.search-results em {
+  color: var(--muted, #738079);
+  font-size: 10px;
+}
+.search-results em {
+  font-style: normal;
+  text-transform: capitalize;
+}
+.search-result-icon {
+  width: 34px;
+  height: 34px;
+  display: grid !important;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--accent-soft, #efedff);
+  color: var(--accent, #6556e8);
+}
+.search-result-icon svg {
+  width: 17px;
+}
+.search-mobile {
+  display: none;
 }
 .top-search:focus-within {
   background: var(--surface, #fff) !important;
@@ -203,6 +287,25 @@
   }
   .top-search {
     display: none !important;
+  }
+  .top-search.open {
+    width: auto !important;
+    height: 46px;
+    display: flex !important;
+    position: absolute;
+    top: 62px;
+    left: 12px;
+    right: 12px;
+    z-index: 90;
+    background: var(--surface, #fff) !important;
+    box-shadow: 0 14px 40px rgba(20, 34, 29, 0.18);
+  }
+  .top-search.open kbd {
+    display: none;
+  }
+  .search-mobile {
+    display: grid;
+    place-items: center;
   }
   .top-profile {
     display: none;

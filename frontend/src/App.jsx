@@ -24,7 +24,9 @@ import {
   Camera,
   Check,
   Clock3,
+  FileText,
   LayoutDashboard,
+  Link2,
   LogOut,
   Mail,
   MapPin,
@@ -941,17 +943,78 @@ function Side({ page, setPage, user, logout, open, setOpen }) {
   );
 }
 function Top({ title, open, user, setPage }) {
-  const searchRef = useRef(null);
+  const searchRef = useRef(null),
+    searchRoot = useRef(null),
+    [query, setQuery] = useState(""),
+    [results, setResults] = useState([]),
+    [searching, setSearching] = useState(false),
+    [searchOpen, setSearchOpen] = useState(false),
+    [mobileSearch, setMobileSearch] = useState(false);
   useEffect(() => {
     const focusSearch = (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
+        setMobileSearch(true);
+        setSearchOpen(true);
         searchRef.current?.focus();
       }
+      if (event.key === "Escape") {
+        setSearchOpen(false);
+        setMobileSearch(false);
+        searchRef.current?.blur();
+      }
+    };
+    const closeSearch = (event) => {
+      if (!searchRoot.current?.contains(event.target)) setSearchOpen(false);
     };
     window.addEventListener("keydown", focusSearch);
-    return () => window.removeEventListener("keydown", focusSearch);
+    document.addEventListener("pointerdown", closeSearch);
+    return () => {
+      window.removeEventListener("keydown", focusSearch);
+      document.removeEventListener("pointerdown", closeSearch);
+    };
   }, []);
+  useEffect(() => {
+    const normalized = query.trim();
+    if (normalized.length < 2) return undefined;
+    const controller = new AbortController(),
+      timer = setTimeout(() => {
+        setSearching(true);
+        api(`/search?q=${encodeURIComponent(normalized)}`, {
+          signal: controller.signal,
+        })
+          .then((data) => {
+            setResults(data.items || []);
+            setSearchOpen(true);
+          })
+          .catch((error) => {
+            if (error.name !== "AbortError") setResults([]);
+          })
+          .finally(() => setSearching(false));
+      }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query]);
+  function openResult(item) {
+    setPage(item.page);
+    if (item.classroomId)
+      window.dispatchEvent(
+        new CustomEvent("classmark:navigate", {
+          detail: {
+            page: item.page,
+            classroomId: item.classroomId,
+            tab: item.tab,
+            assignmentId: item.assignmentId || "",
+          },
+        }),
+      );
+    setQuery("");
+    setResults([]);
+    setSearchOpen(false);
+    setMobileSearch(false);
+  }
   return (
     <header className="top">
       <button
@@ -965,16 +1028,60 @@ function Top({ title, open, user, setPage }) {
         <small>CLASSMARK PORTAL</small>
         <h3>{title}</h3>
       </div>
-      <label className="top-search">
+      <div
+        className={`top-search ${mobileSearch ? "open" : ""}`}
+        ref={searchRoot}
+      >
         <Search />
         <input
           ref={searchRef}
-          placeholder="Search classes and students"
-          aria-label="Search classes and students"
+          value={query}
+          onChange={(event) => {
+            const value = event.target.value;
+            setQuery(value);
+            setResults([]);
+            setSearching(value.trim().length >= 2);
+          }}
+          onFocus={() => setSearchOpen(true)}
+          placeholder="Search classes, people and work"
+          aria-label="Search classrooms, people, assignments, and resources"
+          autoComplete="off"
         />
         <kbd>Ctrl K</kbd>
-      </label>
+        {searchOpen && query.trim().length >= 2 && (
+          <section className="search-results" aria-live="polite">
+            {searching ? (
+              <p>Searching…</p>
+            ) : results.length ? (
+              results.map((item, index) => (
+                <button
+                  key={`${item.type}-${item.classroomId || "system"}-${item.assignmentId || item.title}-${index}`}
+                  onClick={() => openResult(item)}
+                >
+                  <span className={`search-result-icon ${item.type}`}>
+                    {item.type === "classroom" ? <BookOpen /> : item.type === "assignment" ? <FileText /> : item.type === "resource" ? <Link2 /> : <Users />}
+                  </span>
+                  <span><b>{item.title}</b><small>{item.subtitle}</small></span>
+                  <em>{item.type}</em>
+                </button>
+              ))
+            ) : (
+              <p>No accessible results for “{query.trim()}”.</p>
+            )}
+          </section>
+        )}
+      </div>
       <div className="top-actions">
+        <button
+          className="search-mobile top-icon-button"
+          onClick={() => {
+            setMobileSearch((value) => !value);
+            setTimeout(() => searchRef.current?.focus(), 0);
+          }}
+          aria-label="Open global search"
+        >
+          <Search />
+        </button>
         {user.role !== "admin" && <NotificationCenter />}
         <button
           className="top-profile"

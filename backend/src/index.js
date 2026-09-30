@@ -1142,6 +1142,89 @@ app.get("/api/people", auth, (req, res) => {
     .all(req.auth.sub, req.auth.sub);
   res.json({ classrooms, people });
 });
+app.get("/api/search", auth, (req, res) => {
+  const query = String(req.query.q || "").trim().slice(0, 80);
+  if (query.length < 2) return res.json({ items: [] });
+  const match = `%${query}%`;
+  let classroomIds;
+  if (req.auth.role === "admin")
+    classroomIds = db
+      .prepare("SELECT id FROM classrooms WHERE archived_at IS NULL")
+      .all()
+      .map(({ id }) => id);
+  else if (req.auth.role === "teacher")
+    classroomIds = db
+      .prepare(
+        "SELECT DISTINCT c.id FROM classrooms c LEFT JOIN classroom_teachers ct ON ct.classroom_id=c.id WHERE c.archived_at IS NULL AND (c.teacher_id=? OR ct.teacher_id=?)",
+      )
+      .all(req.auth.sub, req.auth.sub)
+      .map(({ id }) => id);
+  else
+    classroomIds = db
+      .prepare(
+        "SELECT c.id FROM classrooms c JOIN memberships m ON m.classroom_id=c.id WHERE c.archived_at IS NULL AND m.user_id=?",
+      )
+      .all(req.auth.sub)
+      .map(({ id }) => id);
+  const placeholders = classroomIds.map(() => "?").join(","),
+    items = [];
+  if (classroomIds.length) {
+    for (const room of db
+      .prepare(
+        `SELECT id,name,subject,section FROM classrooms WHERE id IN (${placeholders}) AND (name LIKE ? OR subject LIKE ? OR section LIKE ?) ORDER BY name LIMIT 6`,
+      )
+      .all(...classroomIds, match, match, match))
+      items.push({
+        type: "classroom",
+        title: room.name,
+        subtitle: `${room.subject}${room.section ? ` · ${room.section}` : ""}`,
+        page: req.auth.role === "admin" ? "admin" : "classes",
+        classroomId: req.auth.role === "admin" ? "" : room.id,
+        tab: "stream",
+      });
+    for (const assignment of db
+      .prepare(
+        `SELECT a.id,a.classroom_id classroomId,a.title,c.name classroomName FROM assignments a JOIN classrooms c ON c.id=a.classroom_id WHERE a.classroom_id IN (${placeholders}) AND (a.title LIKE ? OR a.description LIKE ?) ORDER BY a.created_at DESC LIMIT 6`,
+      )
+      .all(...classroomIds, match, match))
+      items.push({
+        type: "assignment",
+        title: assignment.title,
+        subtitle: assignment.classroomName,
+        page: req.auth.role === "admin" ? "admin" : "classes",
+        classroomId: req.auth.role === "admin" ? "" : assignment.classroomId,
+        tab: "assignments",
+        assignmentId: assignment.id,
+      });
+    for (const resource of db
+      .prepare(
+        `SELECT r.classroom_id classroomId,r.title,c.name classroomName FROM classroom_resources r JOIN classrooms c ON c.id=r.classroom_id WHERE r.classroom_id IN (${placeholders}) AND (r.title LIKE ? OR r.description LIKE ?) ORDER BY r.created_at DESC LIMIT 6`,
+      )
+      .all(...classroomIds, match, match))
+      items.push({
+        type: "resource",
+        title: resource.title,
+        subtitle: resource.classroomName,
+        page: req.auth.role === "admin" ? "admin" : "classes",
+        classroomId: req.auth.role === "admin" ? "" : resource.classroomId,
+        tab: "stream",
+      });
+    for (const person of db
+      .prepare(
+        `SELECT u.id,u.name,u.email,u.role,u.identifier,MIN(access.classroom_id) classroomId FROM users u JOIN (SELECT user_id,classroom_id FROM memberships UNION SELECT teacher_id user_id,classroom_id FROM classroom_teachers UNION SELECT teacher_id user_id,id classroom_id FROM classrooms) access ON access.user_id=u.id WHERE access.classroom_id IN (${placeholders}) AND u.id<>? AND (u.name LIKE ? OR u.email LIKE ? OR u.identifier LIKE ?) GROUP BY u.id ORDER BY u.name LIMIT 6`,
+      )
+      .all(...classroomIds, req.auth.sub, match, match, match))
+      items.push({
+        type: person.role,
+        title: person.name,
+        subtitle: `${person.role} · ${person.identifier || person.email}`,
+        page: req.auth.role === "admin" ? "admin" : "classes",
+        classroomId: req.auth.role === "admin" ? "" : person.classroomId,
+        tab: "people",
+      });
+  }
+  res.json({ items: items.slice(0, 20) });
+});
 app.get("/api/overview", auth, (req, res) => {
   const teacher = req.auth.role === "teacher";
   const access = teacher

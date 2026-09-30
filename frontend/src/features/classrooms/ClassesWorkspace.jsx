@@ -30,6 +30,11 @@ export default function ClassesWorkspace({
   const [selectedId, setSelectedId] = useState(
     () => navigation?.classroomId || "",
   );
+  const [selectedTab, setSelectedTab] = useState(() =>
+    ["stream", "assignments", "people", "marks"].includes(navigation?.tab)
+      ? navigation.tab
+      : "stream",
+  );
   const [error, setError] = useState("");
   const [code, setCode] = useState("");
 
@@ -42,6 +47,17 @@ export default function ClassesWorkspace({
       .catch((issue) => setError(issue.message));
   }
   useEffect(load, [refresh]);
+  useEffect(() => {
+    if (!navigation?.classroomId) return;
+    // Synchronize explicit notification/search navigation with this workspace.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedId(navigation.classroomId);
+    setSelectedTab(
+      ["stream", "assignments", "people", "marks"].includes(navigation.tab)
+        ? navigation.tab
+        : "stream",
+    );
+  }, [navigation?.classroomId, navigation?.nonce, navigation?.tab]);
   const selected = rooms.find((room) => room.id === selectedId);
 
   async function join(event) {
@@ -98,10 +114,13 @@ export default function ClassesWorkspace({
         key={`${selected.id}-${navigation?.nonce || "manual"}`}
         room={selected}
         user={user}
-        onBack={() => setSelectedId("")}
+        onBack={() => {
+          setSelectedId("");
+          setSelectedTab("stream");
+        }}
         onInvite={(course) => openModal({ type: "invite", course })}
         onChanged={load}
-        initialTab={navigation?.tab}
+        initialTab={selectedTab}
         initialAssignmentId={navigation?.assignmentId}
       />
     );
@@ -155,7 +174,7 @@ export default function ClassesWorkspace({
       {rooms.length ? (
         <div className="cards">
           {rooms.map((room) => (
-            <article key={room.id} onClick={() => setSelectedId(room.id)}>
+            <article key={room.id} onClick={() => { setSelectedTab("stream"); setSelectedId(room.id); }}>
               <header style={{ background: room.color }}>
                 <b>{room.subject}</b>
                 <BookOpen />

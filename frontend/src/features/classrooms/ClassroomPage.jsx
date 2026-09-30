@@ -63,7 +63,10 @@ export default function ClassroomPage({
   initialTab = "stream",
   initialAssignmentId = "",
 }) {
-  const [tab, setTab] = useState(initialTab);
+  const allowedTabs = ["stream", "assignments", "people", "marks"];
+  const [tab, setTab] = useState(
+    allowedTabs.includes(initialTab) ? initialTab : "stream",
+  );
   const [posts, setPosts] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [members, setMembers] = useState([]);
