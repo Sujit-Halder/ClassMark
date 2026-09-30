@@ -3174,6 +3174,10 @@ app.get("/api/admin/dashboard", auth, adminOnly, (_req, res) => {
   });
 });
 
+app.use("/api", (_req, res) =>
+  res.status(404).json({ message: "API endpoint not found." }),
+);
+
 app.use(express.static(frontendDist));
 app.use((req, res, next) => {
   if (req.method === "GET" && !req.path.startsWith("/api/"))

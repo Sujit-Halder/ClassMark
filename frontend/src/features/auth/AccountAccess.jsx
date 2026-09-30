@@ -4,7 +4,24 @@ import { BookOpen, Check, Eye, EyeOff, Fingerprint, MapPin, ScanFace, ShieldChec
 import "../../styles/auth.css";
 import "../../styles/auth-layout.css";
 const API = import.meta.env.VITE_API_URL || "/api";
-async function request(path, body) { const response = await fetch(API + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }), data = await response.json(); if (!response.ok) throw Error(data.message); return data; }
+async function request(path, body) {
+  const response = await fetch(API + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    throw Error(
+      response.status >= 500
+        ? "The API server is unavailable. Check the backend service and Nginx proxy."
+        : "The sign-in request reached a web page instead of the API. Check the Nginx /api proxy and frontend API URL.",
+    );
+  }
+  const data = await response.json();
+  if (!response.ok) throw Error(data.message || "Sign-in failed.");
+  return data;
+}
 const Mark = () => <span className="mark"><Check /></span>;
 function Password({ label, value, setValue, complete }) { const [visible, setVisible] = useState(false); return <label>{label}<span className="password-field"><input type={visible ? "text" : "password"} value={value} onChange={(event) => setValue(event.target.value)} autoComplete={complete} minLength="12" required /><button type="button" aria-label={visible ? "Hide password" : "Show password"} onClick={() => setVisible(!visible)}>{visible ? <EyeOff /> : <Eye />}</button></span></label>; }
 const strength = (value) => Math.min(4, (value.length >= 12) + Number(/[a-z]/.test(value) && /[A-Z]/.test(value)) + Number(/\d/.test(value)) + Number(/[^A-Za-z0-9]/.test(value)));

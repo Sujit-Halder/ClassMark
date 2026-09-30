@@ -98,6 +98,9 @@ VITE_API_URL=
 ```
 
 Never put secrets in a `VITE_*` variable because Vite publishes those values to the browser.
+`VITE_API_URL` must either remain empty for the same-domain Nginx proxy or end
+with `/api` when a separate API host is used. Do not set it to the frontend site
+root, because `/auth/login` would then return `index.html` instead of JSON.
 
 ## Local development
 

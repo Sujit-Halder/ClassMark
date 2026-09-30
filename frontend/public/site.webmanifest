@@ -1,0 +1,17 @@
+{
+  "name": "Classmark Attendance",
+  "short_name": "Classmark",
+  "description": "Secure facial and QR classroom attendance.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fc",
+  "theme_color": "#2f24b7",
+  "icons": [
+    {
+      "src": "/classmark-icon.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
