@@ -133,21 +133,57 @@ function saveProfilePictureIfMissing(userId, image, imageType = "image/jpeg") {
     .run(image, imageType, userId);
   return Boolean(result.changes);
 }
-const tokenFor = (u) =>
-  jwt.sign({ sub: u.id, role: u.role }, secret, { expiresIn: "7d" });
+const tokenFor = (u, adminFaceAuthenticated = false) =>
+  jwt.sign(
+    {
+      sub: u.id,
+      role: u.role,
+      adminFaceAuthenticated:
+        u.role === "admin" ? adminFaceAuthenticated : undefined,
+    },
+    secret,
+    { expiresIn: "7d" },
+  );
 function auth(req, res, next) {
   try {
     req.auth = jwt.verify(
       req.headers.authorization?.replace(/^Bearer /, ""),
       secret,
     );
+    const currentAccount = db
+      .prepare("SELECT role FROM users WHERE id=?")
+      .get(req.auth.sub);
+    if (!currentAccount)
+      return res.status(401).json({ message: "This account is no longer available." });
+    req.auth.role = currentAccount.role;
+    const adminPreVerificationPaths = [
+      "/api/profile",
+      "/api/profile/picture",
+      "/api/faces/status",
+      "/api/faces/liveness/session",
+      "/api/faces/liveness/complete",
+      "/api/admin/auth/session",
+      "/api/admin/auth/complete",
+    ];
+    if (
+      req.auth.role === "admin" &&
+      req.auth.adminFaceAuthenticated !== true &&
+      !adminPreVerificationPaths.some((path) => req.path.startsWith(path))
+    )
+      return res.status(403).json({
+        code: "ADMIN_FACE_AUTH_REQUIRED",
+        message: "Complete live administrator face verification to continue.",
+      });
     next();
   } catch {
     res.status(401).json({ message: "Please sign in to continue." });
   }
 }
 function adminOnly(req, res, next) {
-  if (req.auth.role !== "admin")
+  if (
+    req.auth.role !== "admin" ||
+    req.auth.adminFaceAuthenticated !== true
+  )
     return res.status(403).json({ message: "Administrator access is required." });
   next();
 }
@@ -646,7 +682,13 @@ app.post("/api/auth/login", async (req, res) => {
     .get(req.body.email?.toLowerCase());
   if (!u || !bcrypt.compareSync(req.body.password || "", u.password_hash))
     return res.status(401).json({ message: "Invalid email or password." });
-  res.json({ token: tokenFor(u), user: publicUser(u) });
+  res.json({
+    token: tokenFor(u),
+    user: {
+      ...publicUser(u),
+      adminFaceAuthenticated: u.role !== "admin",
+    },
+  });
 });
 app.post("/api/passkeys/register/options", auth, async (req, res) => {
   const user = db.prepare("SELECT * FROM users WHERE id=?").get(req.auth.sub),
@@ -855,11 +897,16 @@ app.post("/api/auth/reset-password", (req, res) => {
   });
   res.json({ message: "Password changed successfully. You can now sign in." });
 });
-app.get("/api/profile", auth, (req, res) =>
-  res.json(
-    publicUser(db.prepare("SELECT * FROM users WHERE id=?").get(req.auth.sub)),
-  ),
-);
+app.get("/api/profile", auth, (req, res) => {
+  const user = publicUser(
+    db.prepare("SELECT * FROM users WHERE id=?").get(req.auth.sub),
+  );
+  res.json({
+    ...user,
+    adminFaceAuthenticated:
+      user.role !== "admin" || req.auth.adminFaceAuthenticated === true,
+  });
+});
 app.put("/api/profile", auth, (req, res) => {
   const u = db.prepare("SELECT * FROM users WHERE id=?").get(req.auth.sub),
     name = req.body.name ?? u.name,
@@ -958,6 +1005,8 @@ app.put("/api/settings", auth, (req, res) => {
   });
 });
 app.get("/api/notifications", auth, (req, res) => {
+  if (req.auth.role === "admin")
+    return res.json({ items: [], unread: 0 });
   const linked = db
     .prepare("SELECT id,link FROM notifications WHERE user_id=? AND link IS NOT NULL")
     .all(req.auth.sub);
@@ -1049,6 +1098,14 @@ app.put("/api/account/password", auth, (req, res) => {
 });
 app.get("/api/classrooms", auth, (req, res) => {
   const archived = req.query.archived === "true";
+  if (req.auth.role === "admin")
+    return res.json(
+      db
+        .prepare(
+          `SELECT c.*,(SELECT COUNT(*) FROM memberships m WHERE m.classroom_id=c.id) memberCount,'administrator' classroomRole FROM classrooms c WHERE c.archived_at IS ${archived ? "NOT NULL" : "NULL"} ORDER BY c.name`,
+        )
+        .all(),
+    );
   const sql =
     req.auth.role === "teacher"
       ? `SELECT DISTINCT c.*,(SELECT COUNT(*) FROM memberships m WHERE m.classroom_id=c.id) memberCount,CASE WHEN c.teacher_id=? THEN 'owner' ELSE 'teacher' END classroomRole FROM classrooms c LEFT JOIN classroom_teachers ct ON ct.classroom_id=c.id WHERE (c.teacher_id=? OR ct.teacher_id=?) AND c.archived_at IS ${archived ? "NOT NULL" : "NULL"}`
@@ -1994,6 +2051,114 @@ function faceImageBytes(image) {
     throw new Error("Face image must be between 1 byte and 5 MB.");
   return bytes;
 }
+app.post("/api/admin/auth/session", auth, async (req, res) => {
+  if (req.auth.role !== "admin")
+    return res.status(403).json({ message: "Administrator access is required." });
+  if (!hasVerifiedFace(req.auth.sub))
+    return res.status(403).json({
+      message: "Complete mandatory administrator face enrollment first.",
+    });
+  if (!faceConfig.backendConfigured || !faceConfig.browserConfigured)
+    return res.status(503).json({
+      message: "AWS live face authentication is not fully configured.",
+    });
+  try {
+    const created = await createLivenessSession(randomUUID()),
+      createdAt = now(),
+      expiresAt = new Date(Date.now() + 3 * 60_000).toISOString();
+    db.prepare(
+      "INSERT INTO admin_login_face_sessions(id,user_id,aws_session_id,status,created_at,expires_at) VALUES(?,?,?,?,?,?)",
+    ).run(
+      randomUUID(),
+      req.auth.sub,
+      created.SessionId,
+      "created",
+      createdAt,
+      expiresAt,
+    );
+    res.status(201).json({
+      sessionId: created.SessionId,
+      region: faceConfig.region,
+      identityPoolId: faceConfig.identityPoolId,
+      challengeMode:
+        faceConfig.livenessChallenge === "FaceMovementChallenge"
+          ? "movement"
+          : "movement-and-light",
+      expiresAt,
+    });
+  } catch (error) {
+    console.error("[administrator live authentication session]", error);
+    res.status(502).json({
+      message: `AWS could not start administrator verification: ${error.message || error.name}`,
+    });
+  }
+});
+app.post("/api/admin/auth/complete", auth, async (req, res) => {
+  if (req.auth.role !== "admin")
+    return res.status(403).json({ message: "Administrator access is required." });
+  const verification = db
+    .prepare(
+      "SELECT * FROM admin_login_face_sessions WHERE aws_session_id=? AND user_id=?",
+    )
+    .get(req.body.sessionId, req.auth.sub);
+  if (!verification)
+    return res.status(404).json({ message: "Administrator face check was not found." });
+  if (verification.status === "succeeded")
+    return res.status(409).json({ message: "This face check was already used." });
+  if (new Date(verification.expires_at) < new Date()) {
+    db.prepare(
+      "UPDATE admin_login_face_sessions SET status='expired',completed_at=? WHERE id=?",
+    ).run(now(), verification.id);
+    return res.status(410).json({ message: "The face check expired. Start again." });
+  }
+  try {
+    db.prepare(
+      "UPDATE admin_login_face_sessions SET status='processing' WHERE id=?",
+    ).run(verification.id);
+    const liveness = await getLivenessResult(verification.aws_session_id),
+      livenessConfidence = Number(liveness.Confidence || 0),
+      referenceImage = liveness.ReferenceImage?.Bytes
+        ? Buffer.from(liveness.ReferenceImage.Bytes)
+        : null;
+    if (
+      liveness.Status !== "SUCCEEDED" ||
+      livenessConfidence < faceConfig.livenessThreshold ||
+      !referenceImage?.length
+    )
+      throw new Error("Live person verification was not successful.");
+    const matches = await identifyFace(referenceImage),
+      match = matches.find(
+        (item) => item.User?.UserId === providerUserId(req.auth.sub),
+      );
+    if (!match || Number(match.Similarity || 0) < faceConfig.matchThreshold)
+      throw new Error("The live face does not match this administrator account.");
+    const user = db.prepare("SELECT * FROM users WHERE id=?").get(req.auth.sub),
+      completedAt = now();
+    db.prepare(
+      "UPDATE admin_login_face_sessions SET status='succeeded',completed_at=? WHERE id=?",
+    ).run(completedAt, verification.id);
+    audit(req, "admin.login_face_verified", "user", user.id, null, {
+      livenessConfidence,
+      matchConfidence: Number(match.Similarity || 0),
+    });
+    res.json({
+      token: tokenFor(user, true),
+      user: { ...publicUser(user), adminFaceAuthenticated: true },
+      message: "Administrator identity verified.",
+    });
+  } catch (error) {
+    db.prepare(
+      "UPDATE admin_login_face_sessions SET status='failed',completed_at=? WHERE id=?",
+    ).run(now(), verification.id);
+    securityEvent(req.auth.sub, "admin.face_login_failed", "critical", null, {
+      message: error.message,
+    });
+    res.status(422).json({
+      message:
+        error.message || "Administrator live face verification failed.",
+    });
+  }
+});
 app.post("/api/faces/authentication/session", auth, async (req, res) => {
   if (!faceConfig.backendConfigured || !faceConfig.browserConfigured)
     return res.status(503).json({

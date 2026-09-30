@@ -4,7 +4,7 @@ import AuthView from "./features/auth/AccountAccess.jsx";
 import ClassesWorkspace from "./features/classrooms/ClassesWorkspace.jsx";
 import ClassActionModal from "./features/classrooms/ClassActionModal.jsx";
 import QrCameraScanner from "./features/attendance/QrCameraScanner.jsx";
-import FaceWorkspace from "./features/faces/FaceWorkspace.jsx";
+import FaceWorkspace, { LivenessCheck } from "./features/faces/FaceWorkspace.jsx";
 import SettingsWorkspace from "./features/settings/SettingsWorkspace.jsx";
 import NotificationCenter from "./features/notifications/NotificationCenter.jsx";
 import SecureAttendance from "./features/attendance/SecureAttendance.jsx";
@@ -974,7 +974,7 @@ function Top({ title, open, user, setPage }) {
         <kbd>Ctrl K</kbd>
       </label>
       <div className="top-actions">
-        <NotificationCenter />
+        {user.role !== "admin" && <NotificationCenter />}
         <button
           className="top-profile"
           onClick={() => setPage("settings")}
@@ -989,6 +989,115 @@ function Top({ title, open, user, setPage }) {
       </div>
     </header>
   );
+}
+
+function AdminLoginVerification({ user, onVerified, onSignOut }) {
+  const [session, setSession] = useState(null),
+    [busy, setBusy] = useState(false),
+    [message, setMessage] = useState("");
+  async function begin() {
+    setBusy(true);
+    setMessage("");
+    try {
+      setSession(await api("/admin/auth/session", { method: "POST" }));
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function complete() {
+    setBusy(true);
+    setMessage("Confirming your administrator identity…");
+    try {
+      const result = await api("/admin/auth/complete", {
+        method: "POST",
+        body: JSON.stringify({ sessionId: session.sessionId }),
+      });
+      localStorage.token = result.token;
+      onVerified(result.user);
+    } catch (error) {
+      setSession(null);
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="face-onboarding">
+      <header className="onboarding-brand">
+        <Mark />
+        <b>Classmark administration</b>
+        <button onClick={onSignOut} title="Sign out of this administrator account">
+          Sign out
+        </button>
+      </header>
+      <main>
+        <div className="onboarding-callout">
+          <ShieldCheck />
+          <div>
+            <small>MANDATORY LOGIN VERIFICATION</small>
+            <h1>Confirm your administrator identity</h1>
+            <p>
+              {user.name}, complete a fresh AWS live-face check before this
+              privileged dashboard is unlocked.
+            </p>
+          </div>
+        </div>
+        <section className="panel biometric-status">
+          <div className="status-icon"><ScanFace /></div>
+          <div>
+            <small>ADMINISTRATOR SECURITY</small>
+            <h2>Live verification required</h2>
+            <p>Photos, screens, objects, and partial faces are rejected.</p>
+          </div>
+          <button className="primary" onClick={begin} disabled={busy} title="Start the mandatory live-face check">
+            <ScanFace />{busy ? "Starting…" : "Verify and continue"}
+          </button>
+        </section>
+        {message && <p className="status-message">{message}</p>}
+      </main>
+      {session && (
+        <LivenessCheck
+          enrollment={session}
+          over="ADMINISTRATOR LOGIN"
+          title="Verify your live face"
+          text="Keep this page visible and follow the movement prompt to unlock the dashboard."
+          onComplete={complete}
+          onCancel={(reason) => {
+            setSession(null);
+            if (reason) setMessage(reason);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function useProjectTooltips() {
+  useEffect(() => {
+    const apply = (root = document) => {
+      root
+        .querySelectorAll?.("button:not([title]), a:not([title]), select:not([title]), input:not([title]), textarea:not([title])")
+        .forEach((element) => {
+          const label = element.getAttribute("aria-label") ||
+            element.closest("label")?.childNodes?.[0]?.textContent?.trim() ||
+            element.textContent?.trim() ||
+            element.getAttribute("placeholder");
+          if (!label) return;
+          const action = element.matches("select")
+            ? `Choose ${label.toLowerCase()}`
+            : element.matches("input, textarea")
+              ? `Enter or update ${label.toLowerCase()}`
+              : label;
+          element.title = action.replace(/\s+/g, " ").slice(0, 160);
+        });
+    };
+    apply();
+    const observer = new MutationObserver(() => apply());
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
 }
 const Stat = ({ I, label, value, note, tone }) => (
   <article className="stat">
@@ -1579,6 +1688,7 @@ function Modal({ data, close }) {
   );
 }
 export default function App() {
+  useProjectTooltips();
   const initialQuery = new URLSearchParams(location.search);
   const requestedPage = initialQuery.get("page");
   const [user, setUser] = useState(null),
@@ -1672,7 +1782,7 @@ export default function App() {
         }}
       />
     );
-  if (user.role !== "admin" && !user.faceVerified)
+  if (!user.faceVerified)
     return (
       <div className="face-onboarding">
         <header className="onboarding-brand">
@@ -1694,8 +1804,8 @@ export default function App() {
               <small>REGISTRATION STEP 2 OF 2</small>
               <h1>Verify your identity to activate your account</h1>
               <p>
-                Every teacher and student must complete one secure live face
-                enrollment before joining, creating, or attending a classroom.
+                Every account, including administrators, must complete one
+                secure live-face enrollment before using the portal.
               </p>
             </div>
           </div>
@@ -1706,6 +1816,20 @@ export default function App() {
           />
         </main>
       </div>
+    );
+  if (user.role === "admin" && !user.adminFaceAuthenticated)
+    return (
+      <AdminLoginVerification
+        user={user}
+        onVerified={(account) => {
+          setUser(account);
+          setPage("admin");
+        }}
+        onSignOut={() => {
+          delete localStorage.token;
+          setUser(null);
+        }}
+      />
     );
   return (
     <div className="app">

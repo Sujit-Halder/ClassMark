@@ -268,7 +268,7 @@ export default function SettingsWorkspace({ user, onUserUpdated }) {
   const navigation = [
     ["profile", UserRound, "Profile"],
     ["appearance", Palette, "Appearance"],
-    ["notifications", Bell, "Notifications"],
+    ...(user.role === "admin" ? [] : [["notifications", Bell, "Notifications"]]),
     ["security", ShieldCheck, "Security"],
   ];
   return (
@@ -411,7 +411,7 @@ export default function SettingsWorkspace({ user, onUserUpdated }) {
                 <div>
                   <h2>Appearance</h2>
                   <p>
-                    Changes preview immediately and apply throughout Classmark.
+                    Choose the theme and font used throughout Classmark.
                   </p>
                 </div>
               </div>
@@ -466,14 +466,6 @@ export default function SettingsWorkspace({ user, onUserUpdated }) {
                     {form.font === value && <Check />}
                   </button>
                 ))}
-              </div>
-              <div className="appearance-preview">
-                <small>LIVE PREVIEW</small>
-                <h3>Attendance, beautifully organized.</h3>
-                <p>
-                  Your selected font and theme now style the dashboard,
-                  classrooms, attendance tools, and settings.
-                </p>
               </div>
             </>
           )}
