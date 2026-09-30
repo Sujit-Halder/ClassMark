@@ -395,6 +395,7 @@ npm run build
 
 cd ../backend
 npm run lint
+npm test
 ```
 
 After deployment:
@@ -405,3 +406,40 @@ curl https://YOUR_DOMAIN.com/api/health
 systemctl status classmark --no-pager
 systemctl status nginx --no-pager
 ```
+
+## Planned encrypted SQLite backups to S3
+
+This repository intentionally does not upload or schedule backups automatically. Production backup implementation should use this design:
+
+1. Attach an EC2 IAM role that can write only to a dedicated backup prefix such as `s3://YOUR_BUCKET/classmark/` and can use the selected KMS key. Do not place AWS access keys in `.env`.
+2. Create a consistent SQLite snapshot with the SQLite backup command, rather than copying the live WAL database file directly:
+
+   ```bash
+   sqlite3 /opt/classmark/backend/data/classmark.sqlite ".backup '/var/backups/classmark/classmark.sqlite'"
+   ```
+
+3. Compress the completed snapshot and upload it with server-side KMS encryption:
+
+   ```bash
+   gzip -f /var/backups/classmark/classmark.sqlite
+   aws s3 cp /var/backups/classmark/classmark.sqlite.gz s3://YOUR_BUCKET/classmark/classmark-$(date -u +%Y%m%dT%H%M%SZ).sqlite.gz --sse aws:kms --sse-kms-key-id YOUR_KMS_KEY_ARN
+   ```
+
+4. Run the reviewed script from a systemd timer under the `classmark` service account. Store temporary snapshots outside the Git checkout and restrict the directory to that account.
+5. Configure S3 Versioning, Block Public Access, and a lifecycle rule—for example, daily backups for 30 days and monthly backups for 12 months.
+6. Send failed timer executions to CloudWatch or SNS. Never treat an upload exit code alone as proof of recoverability.
+7. Perform a monthly restore drill on a separate EC2 instance: download one encrypted object, decompress it, run `PRAGMA integrity_check`, start Classmark against the restored database, and verify users, classrooms, attendance, and audit records.
+
+For production passkeys, set the exact HTTPS domain (no path):
+
+```env
+WEBAUTHN_RP_ID=classroom.sujithalder.in
+WEBAUTHN_ORIGIN=https://classroom.sujithalder.in
+WEBAUTHN_RP_NAME=Classmark
+ADMIN_EMAILS=admin@example.com
+```
+
+Classmark detects each signed-in device's IANA timezone in the browser. The
+overview and timetable therefore use that device's local day; no fixed
+`APP_TIMEZONE` setting is required. Reload the page after changing the device
+timezone.

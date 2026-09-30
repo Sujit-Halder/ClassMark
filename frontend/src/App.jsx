@@ -9,6 +9,9 @@ import SettingsWorkspace from "./features/settings/SettingsWorkspace.jsx";
 import NotificationCenter from "./features/notifications/NotificationCenter.jsx";
 import SecureAttendance from "./features/attendance/SecureAttendance.jsx";
 import PeopleWorkspace from "./features/people/PeopleWorkspace.jsx";
+import ScheduleWorkspace from "./features/schedule/ScheduleWorkspace.jsx";
+import ReportsWorkspace from "./features/reports/ReportsWorkspace.jsx";
+import AdminWorkspace from "./features/admin/AdminWorkspace.jsx";
 import { applyAppearance, watchSystemAppearance } from "./lib/appearance.js";
 import "./styles/functional.css";
 import "./styles/session.css";
@@ -16,6 +19,7 @@ import "./styles/profile-picture.css";
 import "./styles/header.css";
 import {
   BookOpen,
+  BarChart3,
   CalendarDays,
   Camera,
   Check,
@@ -29,6 +33,7 @@ import {
   QrCode,
   ScanFace,
   Search,
+  Shield,
   Settings,
   ShieldCheck,
   Users,
@@ -560,10 +565,20 @@ function RealHome({ setPage, modal, user }) {
     [overview, setOverview] = useState({
       attendanceRecords: 0,
       sessionsToday: 0,
+      classesToday: 0,
     }),
     [loading, setLoading] = useState(true);
   useEffect(() => {
-    Promise.all([api("/classrooms"), api("/overview")])
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+      offsetMinutes = new Date().getTimezoneOffset(),
+      overviewQuery = new URLSearchParams({
+        timezone: timeZone,
+        offsetMinutes: String(offsetMinutes),
+      });
+    Promise.all([
+      api("/classrooms"),
+      api(`/overview?${overviewQuery.toString()}`),
+    ])
       .then(([classrooms, summary]) => {
         setRooms(classrooms);
         setOverview(summary);
@@ -615,9 +630,9 @@ function RealHome({ setPage, modal, user }) {
         />
         <Stat
           I={CalendarDays}
-          label="Sessions today"
-          value={overview.sessionsToday}
-          note="Attendance sessions started today"
+          label="Classes today"
+          value={overview.classesToday}
+          note={`${overview.sessionsToday} attendance sessions started`}
           tone="blue"
         />
       </div>
@@ -858,13 +873,21 @@ function ProfileAvatar({ user }) {
 }
 function Side({ page, setPage, user, logout, open, setOpen }) {
   const links =
-    user.role === "teacher"
+    user.role === "admin"
+      ? [
+          ["admin", Shield, "Administration"],
+          ["reports", BarChart3, "Reports"],
+          ["settings", Settings, "Settings"],
+        ]
+      : user.role === "teacher"
       ? [
           ["home", LayoutDashboard, "Overview"],
           ["classes", BookOpen, "My classes"],
           ["attendance", QrCode, "Take attendance"],
           ["face", ScanFace, "Face setup"],
           ["people", Users, "People"],
+          ["schedule", CalendarDays, "Schedule"],
+          ["reports", BarChart3, "Reports"],
           ["settings", Settings, "Settings"],
         ]
       : [
@@ -872,6 +895,8 @@ function Side({ page, setPage, user, logout, open, setOpen }) {
           ["classes", BookOpen, "My classes"],
           ["attendance", QrCode, "QR check-in"],
           ["face", ScanFace, "Face setup"],
+          ["schedule", CalendarDays, "Schedule"],
+          ["reports", BarChart3, "Reports"],
           ["settings", Settings, "Settings"],
         ];
   return (
@@ -1560,7 +1585,7 @@ export default function App() {
       Boolean(localStorage.token),
     ),
     [page, setPage] = useState(
-      ["home", "classes", "attendance", "face", "people", "settings"].includes(
+      ["home", "classes", "attendance", "face", "people", "schedule", "reports", "admin", "settings"].includes(
         requestedPage,
       )
         ? requestedPage
@@ -1594,7 +1619,10 @@ export default function App() {
   useEffect(() => {
     if (!localStorage.token) return;
     api("/profile")
-      .then(setUser)
+      .then((account) => {
+        setUser(account);
+        if (account.role === "admin") setPage("admin");
+      })
       .catch(() => {
         delete localStorage.token;
         setUser(null);
@@ -1621,6 +1649,9 @@ export default function App() {
     attendance: user?.role === "student" ? "QR check-in" : "Take attendance",
     face: "Face recognition",
     people: "People",
+    schedule: "Schedule",
+    reports: "Reports",
+    admin: "Administration",
     settings: "Settings",
   };
   if (checkingSession)
@@ -1635,11 +1666,12 @@ export default function App() {
       <AuthView
         enter={(account) => {
           setUser(account);
+          if (account.role === "admin") setPage("admin");
           setCheckingSession(false);
         }}
       />
     );
-  if (!user.faceVerified)
+  if (user.role !== "admin" && !user.faceVerified)
     return (
       <div className="face-onboarding">
         <header className="onboarding-brand">
@@ -1718,6 +1750,9 @@ export default function App() {
           {page === "attendance" && <RoleAttendance user={user} />}{" "}
           {page === "face" && <FaceWorkspace user={user} Title={Title} />}{" "}
           {page === "people" && user.role === "teacher" && <PeopleWorkspace />}{" "}
+          {page === "schedule" && <ScheduleWorkspace user={user} />}
+          {page === "reports" && <ReportsWorkspace user={user} />}
+          {page === "admin" && user.role === "admin" && <AdminWorkspace />}
           {page === "settings" && <SettingsView user={user} />}
         </main>
       </div>

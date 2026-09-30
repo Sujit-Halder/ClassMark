@@ -179,10 +179,53 @@ db.exec(`
     resolved_at TEXT, resolution_note TEXT NOT NULL DEFAULT '',
     UNIQUE(session_id,user_id)
   ) STRICT;
+  CREATE TABLE IF NOT EXISTS class_schedules (
+    id TEXT PRIMARY KEY,
+    classroom_id TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    weekday INTEGER NOT NULL CHECK(weekday BETWEEN 0 AND 6),
+    start_time TEXT NOT NULL, end_time TEXT NOT NULL,
+    room_number TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY, actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT,
+    classroom_id TEXT REFERENCES classrooms(id) ON DELETE SET NULL,
+    details TEXT NOT NULL DEFAULT '{}', ip_address TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS attendance_corrections (
+    id TEXT PRIMARY KEY, record_id TEXT NOT NULL REFERENCES attendance_records(id) ON DELETE CASCADE,
+    requested_by TEXT NOT NULL REFERENCES users(id), requested_status TEXT NOT NULL CHECK(requested_status IN ('present','absent')),
+    reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+    resolved_by TEXT REFERENCES users(id) ON DELETE SET NULL, resolution_note TEXT NOT NULL DEFAULT '',
+    requested_at TEXT NOT NULL, resolved_at TEXT
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS security_events (
+    id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL, severity TEXT NOT NULL CHECK(severity IN ('info','warning','critical')),
+    classroom_id TEXT REFERENCES classrooms(id) ON DELETE SET NULL,
+    details TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS passkeys (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id TEXT NOT NULL UNIQUE, public_key BLOB NOT NULL, counter INTEGER NOT NULL DEFAULT 0,
+    transports TEXT NOT NULL DEFAULT '[]', device_type TEXT, backed_up INTEGER NOT NULL DEFAULT 0,
+    name TEXT NOT NULL DEFAULT 'Passkey', created_at TEXT NOT NULL, last_used_at TEXT
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS webauthn_challenges (
+    id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT, purpose TEXT NOT NULL CHECK(purpose IN ('register','authenticate')),
+    challenge TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL
+  ) STRICT;
   CREATE INDEX IF NOT EXISTS idx_face_sessions_user ON face_enrollment_sessions(user_id,created_at);
   CREATE INDEX IF NOT EXISTS idx_face_auth_grants_user ON face_auth_grants(user_id,expires_at);
   CREATE INDEX IF NOT EXISTS idx_face_verification_user ON face_verification_sessions(user_id,created_at);
   CREATE INDEX IF NOT EXISTS idx_attendance_reviews_session ON attendance_review_requests(session_id,status);
+  CREATE INDEX IF NOT EXISTS idx_schedules_classroom ON class_schedules(classroom_id,weekday,start_time);
+  CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
+  CREATE INDEX IF NOT EXISTS idx_corrections_status ON attendance_corrections(status,requested_at);
+  CREATE INDEX IF NOT EXISTS idx_security_created ON security_events(created_at,severity);
+  CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id);
 `)
 
 export function transaction(work) {

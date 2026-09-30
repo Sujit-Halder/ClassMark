@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { startRegistration } from "@simplewebauthn/browser";
 import {
   Bell,
   Camera,
   Check,
   Eye,
   EyeOff,
+  Fingerprint,
   Laptop,
   LockKeyhole,
   Moon,
@@ -97,6 +99,7 @@ export default function SettingsWorkspace({ user, onUserUpdated }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [processing, setProcessing] = useState("");
+  const [passkeys, setPasskeys] = useState([]);
   const [passwords, setPasswords] = useState({
     currentPassword: "",
     newPassword: "",
@@ -117,11 +120,12 @@ export default function SettingsWorkspace({ user, onUserUpdated }) {
 
   useEffect(() => {
     let active = true;
-    Promise.all([request("/profile"), request("/settings")])
-      .then(([profile, settings]) => {
+    Promise.all([request("/profile"), request("/settings"), request("/passkeys")])
+      .then(([profile, settings, savedPasskeys]) => {
         if (!active) return;
         setForm((current) => ({ ...current, ...profile, ...settings }));
         applyAppearance(settings);
+        setPasskeys(savedPasskeys);
       })
       .catch((error) => active && setMessage(error.message));
     fetch(`${API}/profile/picture/${user.id}`, {
@@ -242,6 +246,19 @@ export default function SettingsWorkspace({ user, onUserUpdated }) {
       setBusy(false);
       setProcessing("");
     }
+  }
+  async function addPasskey() {
+    setBusy(true); setProcessing("Waiting for your device’s passkey confirmation…"); setMessage("");
+    try {
+      const options = await request("/passkeys/register/options", { method: "POST", body: "{}" });
+      const response = await startRegistration({ optionsJSON: options });
+      const result = await request("/passkeys/register/verify", { method: "POST", body: JSON.stringify({ response, name: navigator.userAgent.includes("Mobile") ? "Mobile passkey" : "Device passkey" }) });
+      setPasskeys(await request("/passkeys")); setMessage(result.message);
+    } catch (error) { setMessage(error.message); } finally { setBusy(false); setProcessing(""); }
+  }
+  async function removePasskey(id) {
+    if (!confirm("Remove this passkey? Password sign-in will remain available.")) return;
+    try { const result = await request(`/passkeys/${id}`, { method: "DELETE" }); setPasskeys(await request("/passkeys")); setMessage(result.message); } catch (error) { setMessage(error.message); }
   }
 
   const navigation = [
@@ -578,6 +595,11 @@ export default function SettingsWorkspace({ user, onUserUpdated }) {
                   Update password
                 </button>
               </form>
+              <div className="passkey-section">
+                <div><Fingerprint /><span><h3>Passkeys</h3><p>Use your fingerprint, face unlock, or device PIN for phishing-resistant sign-in.</p></span></div>
+                <button className="outline" type="button" onClick={addPasskey} disabled={busy}><Fingerprint />Add passkey</button>
+                {passkeys.map((passkey) => <article key={passkey.id}><span><b>{passkey.name}</b><small>Added {new Date(passkey.createdAt).toLocaleDateString()}{passkey.lastUsedAt ? ` · Used ${new Date(passkey.lastUsedAt).toLocaleDateString()}` : ""}</small></span><button type="button" className="danger-link" onClick={() => removePasskey(passkey.id)}>Remove</button></article>)}
+              </div>
             </>
           )}
           {message && (

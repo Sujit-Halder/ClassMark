@@ -1,0 +1,13 @@
+.schedule-day.today {
+  outline: 2px solid var(--primary, #21845b);
+  outline-offset: -2px;
+}
+
+.schedule-day.today > header > small {
+  margin-left: auto;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--primary-soft, #e5f4ed);
+  color: var(--primary, #21845b);
+  font-weight: 800;
+}

@@ -5,6 +5,13 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 import QRCode from "qrcode";
+import PDFDocument from "pdfkit";
+import {
+  generateAuthenticationOptions,
+  generateRegistrationOptions,
+  verifyAuthenticationResponse,
+  verifyRegistrationResponse,
+} from "@simplewebauthn/server";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -32,6 +39,55 @@ const port = Number(process.env.PORT || 4000),
     25,
     Number(process.env.NOTIFICATION_READ_LIMIT) || 200,
   );
+const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function resolveDeviceClock(query) {
+  const requestedTimeZone = String(query.timezone || "").slice(0, 100);
+  try {
+    const weekdayFormatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: requestedTimeZone,
+        weekday: "short",
+      }),
+      dateFormatter = new Intl.DateTimeFormat("en-CA", {
+        timeZone: requestedTimeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }),
+      dateKey = (date) => {
+        const parts = Object.fromEntries(
+          dateFormatter
+            .formatToParts(date)
+            .filter(({ type }) => type !== "literal")
+            .map(({ type, value }) => [type, value]),
+        );
+        return `${parts.year}-${parts.month}-${parts.day}`;
+      };
+    return {
+      weekday: weekdayNames.indexOf(weekdayFormatter.format(new Date())),
+      today: dateKey(new Date()),
+      dateKey,
+      timeZone: requestedTimeZone,
+    };
+  } catch {
+    const suppliedOffset = Number(query.offsetMinutes),
+      offsetMinutes =
+        Number.isFinite(suppliedOffset) && Math.abs(suppliedOffset) <= 14 * 60
+          ? suppliedOffset
+          : new Date().getTimezoneOffset(),
+      shifted = (date) => new Date(date.getTime() - offsetMinutes * 60_000),
+      dateKey = (date) => shifted(date).toISOString().slice(0, 10),
+      localNow = shifted(new Date());
+    return {
+      weekday: localNow.getUTCDay(),
+      today: dateKey(new Date()),
+      dateKey,
+      timeZone: null,
+    };
+  }
+}
+const relyingPartyId = process.env.WEBAUTHN_RP_ID || new URL(appUrl).hostname,
+  relyingPartyOrigin = process.env.WEBAUTHN_ORIGIN || new URL(appUrl).origin,
+  relyingPartyName = process.env.WEBAUTHN_RP_NAME || "Classmark";
 const frontendDist = join(
   dirname(dirname(dirname(fileURLToPath(import.meta.url)))),
   "frontend",
@@ -41,6 +97,12 @@ if (!process.env.JWT_SECRET)
   console.warn(
     "[security] JWT_SECRET is missing. Set a long random value in backend/.env before deployment.",
   );
+const administratorEmails = String(process.env.ADMIN_EMAILS || "")
+  .split(",")
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
+for (const email of administratorEmails)
+  db.prepare("UPDATE users SET role='admin' WHERE lower(email)=?").run(email);
 const hasVerifiedFace = (userId) =>
   Boolean(
     db
@@ -83,6 +145,39 @@ function auth(req, res, next) {
   } catch {
     res.status(401).json({ message: "Please sign in to continue." });
   }
+}
+function adminOnly(req, res, next) {
+  if (req.auth.role !== "admin")
+    return res.status(403).json({ message: "Administrator access is required." });
+  next();
+}
+function audit(req, action, entityType, entityId, classroomId, details = {}) {
+  db.prepare(
+    "INSERT INTO audit_logs(id,actor_id,action,entity_type,entity_id,classroom_id,details,ip_address,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+  ).run(
+    randomUUID(),
+    req.auth?.sub || null,
+    action,
+    entityType,
+    entityId || null,
+    classroomId || null,
+    JSON.stringify(details),
+    req.ip || "",
+    now(),
+  );
+}
+function securityEvent(userId, eventType, severity, classroomId, details = {}) {
+  db.prepare(
+    "INSERT INTO security_events(id,user_id,event_type,severity,classroom_id,details,created_at) VALUES(?,?,?,?,?,?,?)",
+  ).run(
+    randomUUID(),
+    userId || null,
+    eventType,
+    severity,
+    classroomId || null,
+    JSON.stringify(details),
+    now(),
+  );
 }
 const distance = (a, b) => {
   const r = (n) => (n * Math.PI) / 180,
@@ -311,6 +406,19 @@ function finalizeAttendanceSession(session) {
       marksLink,
       true,
     );
+  if (process.env.SMTP_HOST) {
+    const teacherEmails = db
+      .prepare(`SELECT DISTINCT u.email FROM users u JOIN (SELECT teacher_id id FROM classrooms WHERE id=? UNION SELECT teacher_id id FROM classroom_teachers WHERE classroom_id=?) teachers ON teachers.id=u.id`)
+      .all(session.classroom_id, session.classroom_id)
+      .map((teacher) => teacher.email);
+    if (teacherEmails.length)
+      void mailTransport().sendMail({
+        from: process.env.MAIL_FROM || process.env.SMTP_USER,
+        to: teacherEmails.join(","),
+        subject: `Attendance results: ${room.name}`,
+        text: `${room.name} attendance was finalized.\n\nPresent: ${present}\nAbsent: ${studentRecords.length - present}\nTotal students: ${studentRecords.length}\n\nOpen Classmark to review the Marks section.`,
+      }).catch((error) => console.error("[attendance summary email]", error.message));
+  }
   return { finalized, records };
 }
 
@@ -540,6 +648,152 @@ app.post("/api/auth/login", async (req, res) => {
     return res.status(401).json({ message: "Invalid email or password." });
   res.json({ token: tokenFor(u), user: publicUser(u) });
 });
+app.post("/api/passkeys/register/options", auth, async (req, res) => {
+  const user = db.prepare("SELECT * FROM users WHERE id=?").get(req.auth.sub),
+    existing = db
+      .prepare("SELECT credential_id,transports FROM passkeys WHERE user_id=?")
+      .all(user.id);
+  const options = await generateRegistrationOptions({
+    rpName: relyingPartyName,
+    rpID: relyingPartyId,
+    userName: user.email,
+    userDisplayName: user.name,
+    userID: new TextEncoder().encode(user.id),
+    attestationType: "none",
+    authenticatorSelection: {
+      residentKey: "preferred",
+      userVerification: "required",
+    },
+    excludeCredentials: existing.map((item) => ({
+      id: item.credential_id,
+      transports: JSON.parse(item.transports || "[]"),
+    })),
+  });
+  db.prepare("DELETE FROM webauthn_challenges WHERE user_id=? AND purpose='register'").run(user.id);
+  db.prepare(
+    "INSERT INTO webauthn_challenges(id,user_id,purpose,challenge,expires_at,created_at) VALUES(?,?,?,?,?,?)",
+  ).run(
+    randomUUID(),
+    user.id,
+    "register",
+    options.challenge,
+    new Date(Date.now() + 5 * 60_000).toISOString(),
+    now(),
+  );
+  res.json(options);
+});
+app.post("/api/passkeys/register/verify", auth, async (req, res) => {
+  const challenge = db
+    .prepare(
+      "SELECT * FROM webauthn_challenges WHERE user_id=? AND purpose='register' AND expires_at>? ORDER BY created_at DESC LIMIT 1",
+    )
+    .get(req.auth.sub, now());
+  if (!challenge)
+    return res.status(410).json({ message: "Passkey setup expired. Start again." });
+  try {
+    const verification = await verifyRegistrationResponse({
+      response: req.body.response,
+      expectedChallenge: challenge.challenge,
+      expectedOrigin: relyingPartyOrigin,
+      expectedRPID: relyingPartyId,
+      requireUserVerification: true,
+    });
+    if (!verification.verified || !verification.registrationInfo)
+      return res.status(400).json({ message: "Passkey verification failed." });
+    const info = verification.registrationInfo;
+    db.prepare(
+      "INSERT INTO passkeys(id,user_id,credential_id,public_key,counter,transports,device_type,backed_up,name,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      randomUUID(),
+      req.auth.sub,
+      info.credential.id,
+      Buffer.from(info.credential.publicKey),
+      info.credential.counter,
+      JSON.stringify(info.credential.transports || req.body.response.response?.transports || []),
+      info.credentialDeviceType || null,
+      info.credentialBackedUp ? 1 : 0,
+      String(req.body.name || "Passkey").slice(0, 80),
+      now(),
+    );
+    db.prepare("DELETE FROM webauthn_challenges WHERE id=?").run(challenge.id);
+    audit(req, "passkey.registered", "passkey", info.credential.id, null);
+    res.json({ ok: true, message: "Passkey added successfully." });
+  } catch (error) {
+    res.status(400).json({ message: `Passkey setup failed: ${error.message}` });
+  }
+});
+app.post("/api/auth/passkey/options", async (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase(),
+    user = db.prepare("SELECT * FROM users WHERE email=?").get(email);
+  if (!user)
+    return res.status(404).json({ message: "No passkey account was found." });
+  const credentials = db
+    .prepare("SELECT credential_id,transports FROM passkeys WHERE user_id=?")
+    .all(user.id);
+  if (!credentials.length)
+    return res.status(404).json({ message: "No passkey is registered for this account." });
+  const options = await generateAuthenticationOptions({
+    rpID: relyingPartyId,
+    userVerification: "required",
+    allowCredentials: credentials.map((item) => ({
+      id: item.credential_id,
+      transports: JSON.parse(item.transports || "[]"),
+    })),
+  });
+  db.prepare("DELETE FROM webauthn_challenges WHERE user_id=? AND purpose='authenticate'").run(user.id);
+  db.prepare(
+    "INSERT INTO webauthn_challenges(id,user_id,email,purpose,challenge,expires_at,created_at) VALUES(?,?,?,?,?,?,?)",
+  ).run(randomUUID(), user.id, email, "authenticate", options.challenge, new Date(Date.now() + 5 * 60_000).toISOString(), now());
+  res.json({ ...options, email });
+});
+app.post("/api/auth/passkey/verify", async (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase(),
+    user = db.prepare("SELECT * FROM users WHERE email=?").get(email),
+    challenge = user && db
+      .prepare("SELECT * FROM webauthn_challenges WHERE user_id=? AND purpose='authenticate' AND expires_at>? ORDER BY created_at DESC LIMIT 1")
+      .get(user.id, now()),
+    passkey = user && db
+      .prepare("SELECT * FROM passkeys WHERE user_id=? AND credential_id=?")
+      .get(user.id, req.body.response?.id);
+  if (!user || !challenge || !passkey)
+    return res.status(400).json({ message: "Passkey sign-in request is invalid or expired." });
+  try {
+    const verification = await verifyAuthenticationResponse({
+      response: req.body.response,
+      expectedChallenge: challenge.challenge,
+      expectedOrigin: relyingPartyOrigin,
+      expectedRPID: relyingPartyId,
+      credential: {
+        id: passkey.credential_id,
+        publicKey: new Uint8Array(passkey.public_key),
+        counter: passkey.counter,
+        transports: JSON.parse(passkey.transports || "[]"),
+      },
+      requireUserVerification: true,
+    });
+    if (!verification.verified)
+      return res.status(401).json({ message: "Passkey verification failed." });
+    db.prepare("UPDATE passkeys SET counter=?,last_used_at=? WHERE id=?").run(
+      verification.authenticationInfo.newCounter,
+      now(),
+      passkey.id,
+    );
+    db.prepare("DELETE FROM webauthn_challenges WHERE id=?").run(challenge.id);
+    res.json({ token: tokenFor(user), user: publicUser(user) });
+  } catch (error) {
+    securityEvent(user.id, "passkey.failure", "warning", null, { message: error.message });
+    res.status(401).json({ message: `Passkey sign-in failed: ${error.message}` });
+  }
+});
+app.get("/api/passkeys", auth, (req, res) => {
+  res.json(db.prepare("SELECT id,name,device_type deviceType,backed_up backedUp,created_at createdAt,last_used_at lastUsedAt FROM passkeys WHERE user_id=? ORDER BY created_at DESC").all(req.auth.sub));
+});
+app.delete("/api/passkeys/:id", auth, (req, res) => {
+  const result = db.prepare("DELETE FROM passkeys WHERE id=? AND user_id=?").run(req.params.id, req.auth.sub);
+  if (!result.changes) return res.status(404).json({ message: "Passkey not found." });
+  audit(req, "passkey.deleted", "passkey", req.params.id, null);
+  res.json({ ok: true, message: "Passkey removed." });
+});
 app.post("/api/auth/forgot-password", async (req, res) => {
   const email = String(req.body.email || "").toLowerCase(),
     u = db.prepare("SELECT id,name,email FROM users WHERE email=?").get(email);
@@ -620,6 +874,7 @@ app.put("/api/profile", auth, (req, res) => {
     name && department && identifier ? 1 : 0,
     u.id,
   );
+  audit(req, "account.profile_updated", "user", u.id, null, { name, department, identifier });
   res.json(publicUser(db.prepare("SELECT * FROM users WHERE id=?").get(u.id)));
 });
 app.put("/api/profile/picture", auth, (req, res) => {
@@ -783,6 +1038,7 @@ app.put("/api/account/password", auth, (req, res) => {
     bcrypt.hashSync(newPassword, 12),
     req.auth.sub,
   );
+  audit(req, "account.password_changed", "user", req.auth.sub, null);
   res.json({ ok: true, message: "Password changed successfully." });
 });
 app.get("/api/classrooms", auth, (req, res) => {
@@ -834,12 +1090,27 @@ app.get("/api/overview", auth, (req, res) => {
       `SELECT COUNT(*) count FROM attendance_records a JOIN classrooms c ON c.id=a.classroom_id WHERE ${access}${teacher ? " AND a.user_id<>c.teacher_id" : " AND a.user_id=?"}`,
     )
     .get(...params, ...(teacher ? [] : [req.auth.sub])).count;
-  const sessionsToday = db
+  const deviceClock = resolveDeviceClock(req.query),
+    recentSessions = db
     .prepare(
-      `SELECT COUNT(*) count FROM attendance_sessions s JOIN classrooms c ON c.id=s.classroom_id WHERE ${access} AND date(s.starts_at)=date('now')`,
+      `SELECT s.starts_at FROM attendance_sessions s JOIN classrooms c ON c.id=s.classroom_id WHERE ${access} AND datetime(s.starts_at)>=datetime('now','-2 days') AND datetime(s.starts_at)<=datetime('now','+2 days')`,
     )
-    .get(...params).count;
-  res.json({ attendanceRecords, sessionsToday });
+    .all(...params),
+    sessionsToday = recentSessions.filter(
+      ({ starts_at: startsAt }) =>
+        deviceClock.dateKey(new Date(startsAt)) === deviceClock.today,
+    ).length,
+    classesToday = db
+      .prepare(
+        `SELECT COUNT(*) count FROM class_schedules cs JOIN classrooms c ON c.id=cs.classroom_id WHERE ${access} AND cs.weekday=?`,
+      )
+      .get(...params, deviceClock.weekday).count;
+  res.json({
+    attendanceRecords,
+    sessionsToday,
+    classesToday,
+    timeZone: deviceClock.timeZone,
+  });
 });
 app.get("/api/classrooms/:id", auth, (req, res) => {
   const room = db
@@ -997,6 +1268,7 @@ app.patch("/api/classrooms/:id/archive", auth, (req, res) => {
   db.prepare(
     "UPDATE notifications SET link=NULL,message=message||' (Classroom archived.)' WHERE link LIKE ?",
   ).run(`%classroomId=${room.id}%`);
+  audit(req, "classroom.archived", "classroom", room.id, room.id);
   res.json({ ok: true });
 });
 app.delete("/api/classrooms/:id", auth, (req, res) => {
@@ -1020,6 +1292,7 @@ app.delete("/api/classrooms/:id", auth, (req, res) => {
       ).run(`%/invite/${invitation.token}%`);
     db.prepare("DELETE FROM classrooms WHERE id=?").run(room.id);
   });
+  audit(req, "classroom.deleted", "classroom", room.id, null, { name: room.name, subject: room.subject });
   res.json({ ok: true });
 });
 app.get("/api/classrooms/:id/posts", auth, (req, res) => {
@@ -1327,6 +1600,7 @@ app.put(
       assignment.id,
       req.params.studentId,
     );
+    audit(req, "assignment.graded", "assignment", assignment.id, assignment.classroom_id, { studentId: req.params.studentId, grade });
     res.json({ ok: true });
   },
 );
@@ -1384,6 +1658,7 @@ app.post("/api/classrooms", auth, (req, res) => {
     room.classCode,
     room.createdAt,
   );
+  audit(req, "classroom.created", "classroom", room.id, room.id, { name: room.name, subject: room.subject });
   res.status(201).json({ ...room, memberCount: 0, classroomRole: "owner" });
 });
 app.post("/api/classrooms/:id/invite", auth, async (req, res) => {
@@ -1584,11 +1859,12 @@ app.post("/api/classrooms/:id/sessions", auth, async (req, res) => {
       .status(400)
       .json({ message: "Room and teacher location required." });
   if (!Number.isFinite(s.accuracy) || s.accuracy > 120)
+    { securityEvent(req.auth.sub, "gps.teacher_inaccurate", "warning", room.id, { accuracy: s.accuracy });
     return res
       .status(422)
       .json({
         message: `Teacher location is not accurate enough${Number.isFinite(s.accuracy) ? ` (±${Math.round(s.accuracy)} m)` : ""}. Enable precise location and wait for GPS before retrying.`,
-      });
+      }); }
   transaction(() => {
     db.prepare(
       "INSERT INTO attendance_sessions(id,classroom_id,teacher_id,room_number,latitude,longitude,location_accuracy_meters,radius_meters,code,starts_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -1644,21 +1920,23 @@ app.post("/api/attendance/check-in", auth, (req, res) => {
     return res.status(403).json({ message: "Not enrolled in this classroom." });
   const accuracy = Number(req.body.accuracy);
   if (!Number.isFinite(accuracy) || accuracy > 120)
+    { securityEvent(req.auth.sub, "gps.student_inaccurate", "warning", s.classroom_id, { accuracy });
     return res
       .status(422)
       .json({
         message: `Student location is not accurate enough${Number.isFinite(accuracy) ? ` (±${Math.round(accuracy)} m)` : ""}. Enable precise location and wait for GPS before retrying.`,
-      });
+      }); }
   const d = distance(
     { lat: s.latitude, lng: s.longitude },
     { lat: +req.body.lat, lng: +req.body.lng },
   );
   if (!Number.isFinite(d) || d > s.radius_meters)
+    { securityEvent(req.auth.sub, "gps.outside_radius", d > s.radius_meters * 5 ? "critical" : "warning", s.classroom_id, { distance: d, radius: s.radius_meters, accuracy });
     return res
       .status(403)
       .json({
         message: `Reliable GPS readings place you ${Math.round(d)} m away; allowed radius is ${s.radius_meters} m. Teacher accuracy: ±${Math.round(s.location_accuracy_meters || 0)} m, student accuracy: ±${Math.round(accuracy)} m.`,
-      });
+      }); }
   const recorded = now(),
     existing = db
       .prepare(
@@ -1826,6 +2104,7 @@ app.post("/api/faces/authentication/complete", auth, async (req, res) => {
       db.prepare(
         "UPDATE face_verification_sessions SET status='failed',completed_at=? WHERE id=?",
       ).run(now(), verification.id);
+      securityEvent(req.auth.sub, "face.liveness_failed", "warning", null, { purpose: verification.purpose, confidence: livenessConfidence, status: liveness.Status });
       return res.status(422).json({
         message:
           "Live person verification failed. Photos, screens, objects, partial faces, and poorly visible faces are not accepted. Use even light and follow the movement prompt.",
@@ -1839,6 +2118,7 @@ app.post("/api/faces/authentication/complete", auth, async (req, res) => {
       db.prepare(
         "UPDATE face_verification_sessions SET status='failed',completed_at=? WHERE id=?",
       ).run(now(), verification.id);
+      securityEvent(req.auth.sub, "face.identity_mismatch", "critical", null, { purpose: verification.purpose, similarity: Number(match?.Similarity || 0) });
       return res.status(422).json({ message: identityFailure });
     }
     const completedAt = now(),
@@ -2143,6 +2423,7 @@ app.patch("/api/attendance/review-requests/:id", auth, (req, res) => {
         "UPDATE attendance_records SET method='qr+manual',status='present',decision_reason='QR and location verified; face exception approved manually by teacher.' WHERE session_id=? AND user_id=?",
       ).run(request.session_id, request.user_id);
   });
+  audit(req, `attendance.manual_review_${decision}`, "attendance_record", request.session_id, request.classroom_id, { studentId: request.user_id, note });
   void notifyUser(
     request.user_id,
     "attendance",
@@ -2405,6 +2686,123 @@ app.get("/api/attendance", auth, (req, res) => {
           )
           .all(req.auth.sub);
   res.json(records);
+});
+
+app.get("/api/schedules", auth, (req, res) => {
+  const rows = req.auth.role === "teacher"
+    ? db.prepare(`SELECT s.*,c.name classroomName,c.subject,c.color FROM class_schedules s JOIN classrooms c ON c.id=s.classroom_id LEFT JOIN classroom_teachers ct ON ct.classroom_id=c.id WHERE (c.teacher_id=? OR ct.teacher_id=?) AND c.archived_at IS NULL GROUP BY s.id ORDER BY s.weekday,s.start_time`).all(req.auth.sub, req.auth.sub)
+    : db.prepare(`SELECT s.*,c.name classroomName,c.subject,c.color FROM class_schedules s JOIN classrooms c ON c.id=s.classroom_id JOIN memberships m ON m.classroom_id=c.id WHERE m.user_id=? AND c.archived_at IS NULL ORDER BY s.weekday,s.start_time`).all(req.auth.sub);
+  res.json(rows);
+});
+app.post("/api/classrooms/:id/schedules", auth, (req, res) => {
+  if (!canTeach(req.params.id, req.auth.sub))
+    return res.status(403).json({ message: "Only classroom teachers can create schedules." });
+  const weekday = Number(req.body.weekday),
+    startTime = String(req.body.startTime || ""),
+    endTime = String(req.body.endTime || "");
+  if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6 || !/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime) || endTime <= startTime)
+    return res.status(400).json({ message: "Choose a valid weekday and time range." });
+  const id = randomUUID();
+  db.prepare("INSERT INTO class_schedules(id,classroom_id,weekday,start_time,end_time,room_number,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)").run(id, req.params.id, weekday, startTime, endTime, String(req.body.roomNumber || ""), req.auth.sub, now());
+  audit(req, "schedule.created", "schedule", id, req.params.id, { weekday, startTime, endTime });
+  res.status(201).json({ id });
+});
+app.delete("/api/schedules/:id", auth, (req, res) => {
+  const schedule = db.prepare("SELECT * FROM class_schedules WHERE id=?").get(req.params.id);
+  if (!schedule || !canTeach(schedule.classroom_id, req.auth.sub))
+    return res.status(403).json({ message: "Only classroom teachers can delete schedules." });
+  db.prepare("DELETE FROM class_schedules WHERE id=?").run(schedule.id);
+  audit(req, "schedule.deleted", "schedule", schedule.id, schedule.classroom_id);
+  res.json({ ok: true });
+});
+
+function attendanceReportRows(user, query) {
+  const conditions = [], params = [];
+  if (query.classroomId) { conditions.push("a.classroom_id=?"); params.push(query.classroomId); }
+  if (query.from) { conditions.push("date(a.recorded_at)>=date(?)"); params.push(query.from); }
+  if (query.to) { conditions.push("date(a.recorded_at)<=date(?)"); params.push(query.to); }
+  if (user.role === "student") { conditions.push("a.user_id=?"); params.push(user.sub); }
+  else if (user.role === "teacher") {
+    conditions.push("(c.teacher_id=? OR EXISTS(SELECT 1 FROM classroom_teachers ct WHERE ct.classroom_id=c.id AND ct.teacher_id=?))");
+    params.push(user.sub, user.sub);
+  }
+  return db.prepare(`SELECT a.id,a.recorded_at recordedAt,a.status,a.method,a.distance_meters distanceMeters,a.location_accuracy_meters locationAccuracy,u.name studentName,u.identifier,c.name classroomName,c.subject,s.room_number roomNumber FROM attendance_records a JOIN users u ON u.id=a.user_id JOIN classrooms c ON c.id=a.classroom_id JOIN attendance_sessions s ON s.id=a.session_id WHERE ${conditions.length ? conditions.join(" AND ") : "1=1"} ORDER BY a.recorded_at DESC`).all(...params);
+}
+app.get("/api/reports/attendance", auth, (req, res) => res.json(attendanceReportRows(req.auth, req.query)));
+app.get("/api/reports/attendance.csv", auth, (req, res) => {
+  const rows = attendanceReportRows(req.auth, req.query),
+    columns = [["Date","recordedAt"],["Classroom","classroomName"],["Subject","subject"],["Student","studentName"],["Student ID","identifier"],["Status","status"],["Method","method"],["Distance (m)","distanceMeters"],["GPS accuracy (m)","locationAccuracy"],["Room","roomNumber"]],
+    quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const csv = [columns.map(([label]) => quote(label)).join(","), ...rows.map((row) => columns.map(([,key]) => quote(row[key])).join(","))].join("\r\n");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", "attachment; filename=classmark-attendance.csv");
+  res.send(`\uFEFF${csv}`);
+});
+app.get("/api/reports/attendance.pdf", auth, (req, res) => {
+  const rows = attendanceReportRows(req.auth, req.query), doc = new PDFDocument({ margin: 42, size: "A4" });
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", "attachment; filename=classmark-attendance.pdf");
+  doc.pipe(res);
+  doc.fontSize(20).fillColor("#24322d").text("Classmark attendance report");
+  doc.moveDown(.3).fontSize(9).fillColor("#67736e").text(`Generated ${new Date().toLocaleString("en-IN")} | ${rows.length} records`);
+  doc.moveDown();
+  for (const row of rows) {
+    if (doc.y > 745) doc.addPage();
+    doc.fontSize(10).fillColor("#17221d").text(`${row.studentName} (${row.identifier || "No ID"})`, { continued: true }).fillColor(row.status === "present" ? "#23805c" : "#b54949").text(`  ${String(row.status).toUpperCase()}`);
+    doc.fontSize(8).fillColor("#6f7a75").text(`${row.classroomName} - ${row.subject} | ${new Date(row.recordedAt).toLocaleString("en-IN")} | ${row.method || "Not recorded"}`);
+    doc.moveDown(.55).strokeColor("#e3e9e5").moveTo(42, doc.y).lineTo(553, doc.y).stroke().moveDown(.55);
+  }
+  doc.end();
+});
+
+app.post("/api/attendance/:recordId/corrections", auth, (req, res) => {
+  const record = db.prepare("SELECT * FROM attendance_records WHERE id=?").get(req.params.recordId);
+  if (!record || (req.auth.role === "student" && record.user_id !== req.auth.sub) || !classroomAccess(record.classroom_id, req.auth.sub))
+    return res.status(404).json({ message: "Attendance record not found." });
+  const requestedStatus = req.body.requestedStatus, reason = String(req.body.reason || "").trim();
+  if (!["present","absent"].includes(requestedStatus) || requestedStatus === record.status || reason.length < 10)
+    return res.status(400).json({ message: "Choose a different status and provide a clear reason of at least 10 characters." });
+  const id = randomUUID();
+  db.prepare("INSERT INTO attendance_corrections(id,record_id,requested_by,requested_status,reason,requested_at) VALUES(?,?,?,?,?,?)").run(id, record.id, req.auth.sub, requestedStatus, reason, now());
+  for (const teacherId of classroomTeacherIds(record.classroom_id)) void notifyUser(teacherId, "attendance", "Attendance correction requested", reason, `/?page=reports`, true);
+  audit(req, "attendance.correction_requested", "attendance_record", record.id, record.classroom_id, { requestedStatus, reason });
+  res.status(201).json({ ok: true, message: "Correction request sent to the classroom teachers." });
+});
+app.get("/api/attendance/corrections", auth, (req, res) => {
+  const rows = req.auth.role === "student"
+    ? db.prepare(`SELECT cr.*,a.status currentStatus,c.name classroomName,s.room_number roomNumber FROM attendance_corrections cr JOIN attendance_records a ON a.id=cr.record_id JOIN classrooms c ON c.id=a.classroom_id JOIN attendance_sessions s ON s.id=a.session_id WHERE cr.requested_by=? ORDER BY cr.requested_at DESC`).all(req.auth.sub)
+    : db.prepare(`SELECT cr.*,a.status currentStatus,a.classroom_id classroomId,c.name classroomName,u.name studentName,u.identifier FROM attendance_corrections cr JOIN attendance_records a ON a.id=cr.record_id JOIN classrooms c ON c.id=a.classroom_id JOIN users u ON u.id=a.user_id LEFT JOIN classroom_teachers ct ON ct.classroom_id=c.id WHERE (c.teacher_id=? OR ct.teacher_id=?) GROUP BY cr.id ORDER BY cr.requested_at DESC`).all(req.auth.sub, req.auth.sub);
+  res.json(rows);
+});
+app.patch("/api/attendance/corrections/:id", auth, (req, res) => {
+  const correction = db.prepare(`SELECT cr.*,a.classroom_id FROM attendance_corrections cr JOIN attendance_records a ON a.id=cr.record_id WHERE cr.id=?`).get(req.params.id);
+  if (!correction || !canTeach(correction.classroom_id, req.auth.sub)) return res.status(404).json({ message: "Correction request not found." });
+  if (correction.status !== "pending") return res.status(409).json({ message: "This request was already resolved." });
+  const decision = req.body.decision;
+  if (!["approved","rejected"].includes(decision)) return res.status(400).json({ message: "Decision must be approved or rejected." });
+  transaction(() => {
+    db.prepare("UPDATE attendance_corrections SET status=?,resolved_by=?,resolution_note=?,resolved_at=? WHERE id=?").run(decision, req.auth.sub, String(req.body.note || ""), now(), correction.id);
+    if (decision === "approved") db.prepare("UPDATE attendance_records SET status=?,decision_reason=? WHERE id=?").run(correction.requested_status, `Corrected by teacher: ${correction.reason}`, correction.record_id);
+  });
+  const requester = db.prepare("SELECT requested_by FROM attendance_corrections WHERE id=?").get(correction.id);
+  void notifyUser(requester.requested_by, "attendance", `Attendance correction ${decision}`, decision === "approved" ? "Your requested attendance correction was approved." : "Your requested attendance correction was rejected.", "/?page=reports", true);
+  audit(req, `attendance.correction_${decision}`, "attendance_record", correction.record_id, correction.classroom_id, { note: req.body.note || "" });
+  res.json({ ok: true });
+});
+
+app.get("/api/admin/dashboard", auth, adminOnly, (_req, res) => {
+  const scalar = (sql) => db.prepare(sql).get().count;
+  res.json({
+    users: scalar("SELECT COUNT(*) count FROM users"),
+    classrooms: scalar("SELECT COUNT(*) count FROM classrooms WHERE archived_at IS NULL"),
+    attendanceSessions: scalar("SELECT COUNT(*) count FROM attendance_sessions"),
+    pendingCorrections: scalar("SELECT COUNT(*) count FROM attendance_corrections WHERE status='pending'"),
+    faceFailures24h: scalar("SELECT COUNT(*) count FROM security_events WHERE event_type LIKE 'face.%' AND severity<>'info' AND datetime(created_at)>=datetime('now','-1 day')"),
+    securityEvents: db.prepare("SELECT se.*,u.name userName,u.email FROM security_events se LEFT JOIN users u ON u.id=se.user_id ORDER BY se.created_at DESC LIMIT 100").all(),
+    auditLogs: db.prepare("SELECT al.*,u.name actorName FROM audit_logs al LEFT JOIN users u ON u.id=al.actor_id ORDER BY al.created_at DESC LIMIT 100").all(),
+    usersList: db.prepare("SELECT id,name,email,role,department,identifier,created_at createdAt FROM users ORDER BY created_at DESC LIMIT 200").all(),
+    classroomsList: db.prepare("SELECT c.id,c.name,c.subject,c.archived_at archivedAt,u.name ownerName,(SELECT COUNT(*) FROM memberships m WHERE m.classroom_id=c.id) studentCount FROM classrooms c JOIN users u ON u.id=c.teacher_id ORDER BY c.created_at DESC LIMIT 200").all(),
+  });
 });
 
 app.use(express.static(frontendDist));
