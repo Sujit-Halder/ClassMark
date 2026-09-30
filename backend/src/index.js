@@ -871,7 +871,13 @@ app.put("/api/profile", auth, (req, res) => {
     name,
     department,
     identifier,
-    name && department && identifier ? 1 : 0,
+    u.role === "admin"
+      ? name
+        ? 1
+        : 0
+      : name && department && identifier
+        ? 1
+        : 0,
     u.id,
   );
   audit(req, "account.profile_updated", "user", u.id, null, { name, department, identifier });
@@ -2475,11 +2481,12 @@ app.post("/api/faces/liveness/session", auth, async (req, res) => {
         message: "Biometric consent is required before face enrollment.",
       });
   const user = db.prepare("SELECT * FROM users WHERE id=?").get(req.auth.sub);
-  if (!user?.name || !user.identifier)
+  const identifierRequired = user?.role === "teacher" || user?.role === "student";
+  if (!user?.name || (identifierRequired && !user.identifier))
     return res
       .status(400)
       .json({
-        message: `Complete your name and ${user?.role === "teacher" ? "faculty" : "student"} ID before enrolling your face.`,
+        message: `Complete your name${user?.role === "teacher" ? " and faculty ID" : user?.role === "student" ? " and student enrollment ID" : ""} before enrolling your face.`,
       });
   const current = db
     .prepare(

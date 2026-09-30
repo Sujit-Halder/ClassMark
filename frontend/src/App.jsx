@@ -877,6 +877,7 @@ function Side({ page, setPage, user, logout, open, setOpen }) {
       ? [
           ["admin", Shield, "Administration"],
           ["reports", BarChart3, "Reports"],
+          ["face", ScanFace, "Face setup"],
           ["settings", Settings, "Settings"],
         ]
       : user.role === "teacher"

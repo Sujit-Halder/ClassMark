@@ -116,7 +116,11 @@ export default function SettingsWorkspace({ user, onUserUpdated }) {
     [passwords.newPassword],
   );
   const idLabel =
-    user.role === "teacher" ? "Faculty ID" : "Student ID / enrollment ID";
+    user.role === "teacher"
+      ? "Faculty ID"
+      : user.role === "student"
+        ? "Student ID / enrollment ID"
+        : "Administrator ID (optional)";
 
   useEffect(() => {
     let active = true;
@@ -377,14 +381,24 @@ export default function SettingsWorkspace({ user, onUserUpdated }) {
                     value={form.identifier || ""}
                     onChange={change}
                     placeholder={
-                      user.role === "teacher" ? "FAC-1042" : "STU-1042"
+                      user.role === "teacher"
+                        ? "FAC-1042"
+                        : user.role === "student"
+                          ? "STU-1042"
+                          : "ADMIN-01"
                     }
                   />
                 </label>
                 <label>
                   Account role
                   <input
-                    value={user.role === "teacher" ? "Teacher" : "Student"}
+                    value={
+                      user.role === "teacher"
+                        ? "Teacher"
+                        : user.role === "student"
+                          ? "Student"
+                          : "Administrator"
+                    }
                     disabled
                   />
                 </label>
