@@ -174,6 +174,24 @@ function auth(req, res, next) {
         code: "ADMIN_FACE_AUTH_REQUIRED",
         message: "Complete live administrator face verification to continue.",
       });
+    const faceEnrollmentPaths = [
+      "/api/profile",
+      "/api/settings",
+      "/api/account/password",
+      "/api/passkeys",
+      "/api/faces/status",
+      "/api/faces/liveness/session",
+      "/api/faces/liveness/complete",
+    ];
+    if (
+      req.auth.role !== "admin" &&
+      !hasVerifiedFace(req.auth.sub) &&
+      !faceEnrollmentPaths.some((path) => req.path.startsWith(path))
+    )
+      return res.status(403).json({
+        code: "FACE_ENROLLMENT_REQUIRED",
+        message: "Complete mandatory face enrollment before using the portal.",
+      });
     next();
   } catch {
     res.status(401).json({ message: "Please sign in to continue." });
@@ -610,15 +628,20 @@ app.post("/api/auth/register", async (req, res) => {
       department = "",
       identifier = "",
     } = req.body;
-    if (!name || !email || !password || !["student", "teacher"].includes(role))
+    const normalizedEmail = String(email || "").trim().toLowerCase(),
+      normalizedName = String(name || "").trim();
+    if (!normalizedName || !normalizedEmail || !password || !["student", "teacher"].includes(role))
       return res
         .status(400)
         .json({ message: "Name, email, password and role are required." });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail))
+      return res.status(400).json({ message: "Enter a valid email address." });
     if (role === "student" && !String(identifier).trim())
       return res
         .status(400)
         .json({
-          message: "Enrollment ID or roll number is required for students.",
+          message:
+            "Enrollment ID or roll number is required for students.",
         });
     if (password !== confirmPassword)
       return res
@@ -644,13 +667,13 @@ app.post("/api/auth/register", async (req, res) => {
         "INSERT INTO users(id,name,email,password_hash,role,department,identifier,profile_complete,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
       ).run(
         id,
-        name,
-        email.toLowerCase(),
+        normalizedName,
+        normalizedEmail,
         bcrypt.hashSync(password, 12),
         role,
-        department,
+        String(department).trim(),
         String(identifier).trim(),
-        role === "student" ? 1 : department && identifier ? 1 : 0,
+        role === "student" ? Number(Boolean(department && identifier)) : 0,
         created,
       );
       db.prepare(
@@ -679,7 +702,7 @@ app.post("/api/auth/register", async (req, res) => {
 app.post("/api/auth/login", async (req, res) => {
   const u = db
     .prepare("SELECT * FROM users WHERE email=?")
-    .get(req.body.email?.toLowerCase());
+    .get(String(req.body.email || "").trim().toLowerCase());
   if (!u || !bcrypt.compareSync(req.body.password || "", u.password_hash))
     return res.status(401).json({ message: "Invalid email or password." });
   res.json({
@@ -837,7 +860,7 @@ app.delete("/api/passkeys/:id", auth, (req, res) => {
   res.json({ ok: true, message: "Passkey removed." });
 });
 app.post("/api/auth/forgot-password", async (req, res) => {
-  const email = String(req.body.email || "").toLowerCase(),
+  const email = String(req.body.email || "").trim().toLowerCase(),
     u = db.prepare("SELECT id,name,email FROM users WHERE email=?").get(email);
   if (u) {
     const token = randomBytes(32).toString("hex"),
@@ -909,24 +932,35 @@ app.get("/api/profile", auth, (req, res) => {
 });
 app.put("/api/profile", auth, (req, res) => {
   const u = db.prepare("SELECT * FROM users WHERE id=?").get(req.auth.sub),
-    name = req.body.name ?? u.name,
-    department = req.body.department ?? u.department,
-    identifier = req.body.identifier ?? u.identifier;
-  db.prepare(
-    "UPDATE users SET name=?,department=?,identifier=?,profile_complete=? WHERE id=?",
-  ).run(
-    name,
-    department,
-    identifier,
-    u.role === "admin"
-      ? name
-        ? 1
-        : 0
-      : name && department && identifier
-        ? 1
-        : 0,
-    u.id,
-  );
+    name = String(req.body.name ?? u.name).trim(),
+    department = String(req.body.department ?? u.department).trim(),
+    identifier = String(req.body.identifier ?? u.identifier).trim();
+  if (!name)
+    return res.status(400).json({ message: "Full name is required." });
+  if (u.role !== "admin" && (!department || !identifier))
+    return res.status(400).json({
+      message:
+        u.role === "teacher"
+          ? "Department and faculty ID are required."
+          : "Department and enrollment ID are required.",
+    });
+  try {
+    db.prepare(
+      "UPDATE users SET name=?,department=?,identifier=?,profile_complete=? WHERE id=?",
+    ).run(
+      name,
+      department,
+      identifier,
+      u.role === "admin" ? 1 : Number(Boolean(department && identifier)),
+      u.id,
+    );
+  } catch (error) {
+    if (String(error).includes("UNIQUE"))
+      return res.status(409).json({
+        message: "That faculty, enrollment, or roll number is already in use.",
+      });
+    throw error;
+  }
   audit(req, "account.profile_updated", "user", u.id, null, { name, department, identifier });
   res.json(publicUser(db.prepare("SELECT * FROM users WHERE id=?").get(u.id)));
 });
@@ -964,11 +998,22 @@ app.get("/api/profile/picture/:id", auth, (req, res) => {
   res.type(u.profile_picture_type).send(u.profile_picture);
 });
 app.get("/api/settings", auth, (req, res) => {
-  const s = db
+  let s = db
     .prepare(
       "SELECT theme,font,email_notifications,attendance_notifications,invitation_notifications FROM user_settings WHERE user_id=?",
     )
     .get(req.auth.sub);
+  if (!s) {
+    db.prepare("INSERT INTO user_settings(user_id,updated_at) VALUES(?,?)").run(
+      req.auth.sub,
+      now(),
+    );
+    s = db
+      .prepare(
+        "SELECT theme,font,email_notifications,attendance_notifications,invitation_notifications FROM user_settings WHERE user_id=?",
+      )
+      .get(req.auth.sub);
+  }
   res.json({
     ...s,
     emailNotifications: Boolean(s.email_notifications),
@@ -988,6 +1033,12 @@ app.put("/api/settings", auth, (req, res) => {
     return res.status(400).json({ message: "Invalid theme." });
   if (!["dm-sans", "system", "serif"].includes(font))
     return res.status(400).json({ message: "Invalid font preference." });
+  if (
+    ![emailNotifications, attendanceNotifications, invitationNotifications].every(
+      (value) => typeof value === "boolean",
+    )
+  )
+    return res.status(400).json({ message: "Notification preferences must be true or false." });
   db.prepare(
     "UPDATE user_settings SET theme=?,font=?,email_notifications=?,attendance_notifications=?,invitation_notifications=?,updated_at=? WHERE user_id=?",
   ).run(
@@ -1453,9 +1504,9 @@ app.get("/api/classrooms/:id/posts", auth, (req, res) => {
   );
 });
 app.post("/api/classrooms/:id/posts", auth, (req, res) => {
-  const room = classroomAccess(req.params.id, req.auth.sub);
+  const room = canTeach(req.params.id, req.auth.sub);
   if (!room)
-    return res.status(403).json({ message: "You do not have access." });
+    return res.status(403).json({ message: "Only classroom teachers can post announcements." });
   const content = String(req.body.content || "").trim();
   if (!content)
     return res.status(400).json({ message: "Post cannot be empty." });
@@ -1493,7 +1544,7 @@ app.delete("/api/classrooms/:id/posts/:postId", auth, (req, res) => {
   if (
     !room ||
     !post ||
-    (post.author_id !== req.auth.sub && room.teacher_id !== req.auth.sub)
+    (post.author_id !== req.auth.sub && !canTeach(room.id, req.auth.sub))
   )
     return res.status(403).json({ message: "You cannot delete this post." });
   db.prepare("DELETE FROM classroom_posts WHERE id=?").run(req.params.postId);
@@ -1737,7 +1788,7 @@ app.put(
       return res
         .status(400)
         .json({ message: `Grade must be between 0 and ${assignment.points}.` });
-    db.prepare(
+    const result = db.prepare(
       "UPDATE assignment_submissions SET grade=?,feedback=?,graded_at=? WHERE assignment_id=? AND student_id=?",
     ).run(
       grade,
@@ -1746,6 +1797,8 @@ app.put(
       assignment.id,
       req.params.studentId,
     );
+    if (!result.changes)
+      return res.status(404).json({ message: "Student submission was not found." });
     audit(req, "assignment.graded", "assignment", assignment.id, assignment.classroom_id, { studentId: req.params.studentId, grade });
     res.json({ ok: true });
   },
@@ -1777,11 +1830,16 @@ app.post("/api/classrooms", auth, (req, res) => {
       .json({
         message: "Complete your face verification before creating a classroom.",
       });
-  const { name, subject, section = "", color = "#6c5ce7" } = req.body;
+  const name = String(req.body.name || "").trim(),
+    subject = String(req.body.subject || "").trim(),
+    section = String(req.body.section || "").trim(),
+    color = String(req.body.color || "#6c5ce7");
   if (!name || !subject)
     return res
       .status(400)
       .json({ message: "Class name and subject are required." });
+  if (!/^#[0-9a-f]{6}$/i.test(color))
+    return res.status(400).json({ message: "Choose a valid classroom color." });
   const room = {
     id: randomUUID(),
     teacherId: req.auth.sub,
@@ -1975,6 +2033,17 @@ app.post("/api/invitations/:token/accept", auth, (req, res) => {
 app.post("/api/classrooms/:id/sessions", auth, async (req, res) => {
   const room = canTeach(req.params.id, req.auth.sub);
   if (!room) return res.status(404).json({ message: "Classroom not found." });
+  const activeSession = db
+    .prepare(
+      "SELECT id,expires_at FROM attendance_sessions WHERE classroom_id=? AND finalized_at IS NULL AND expires_at>? ORDER BY starts_at DESC LIMIT 1",
+    )
+    .get(room.id, now());
+  if (activeSession)
+    return res.status(409).json({
+      message: "This classroom already has an active attendance session. Wait for it to expire before creating another.",
+      sessionId: activeSession.id,
+      expiresAt: activeSession.expires_at,
+    });
   const grant = db
     .prepare(
       "SELECT * FROM face_auth_grants WHERE id=? AND user_id=? AND purpose='create-attendance' AND used_at IS NULL AND datetime(expires_at)>datetime('now')",
@@ -1991,11 +2060,11 @@ app.post("/api/classrooms/:id/sessions", auth, async (req, res) => {
     id: randomUUID(),
     classroomId: room.id,
     teacherId: req.auth.sub,
-    roomNumber: req.body.roomNumber,
+    roomNumber: String(req.body.roomNumber || "").trim().slice(0, 100),
     lat: Number(req.body.lat),
     lng: Number(req.body.lng),
     accuracy: Number(req.body.accuracy),
-    radius: Math.min(100, Math.max(10, Number(req.body.radius || 75))),
+    radius: Number(req.body.radius || 75),
     code: randomBytes(18).toString("hex"),
     startsAt: now(),
     expiresAt: new Date(Date.now() + 300000).toISOString(),
@@ -2004,6 +2073,10 @@ app.post("/api/classrooms/:id/sessions", auth, async (req, res) => {
     return res
       .status(400)
       .json({ message: "Room and teacher location required." });
+  if (s.lat < -90 || s.lat > 90 || s.lng < -180 || s.lng > 180)
+    return res.status(400).json({ message: "Teacher coordinates are invalid." });
+  if (!Number.isFinite(s.radius) || s.radius < 10 || s.radius > 100)
+    return res.status(400).json({ message: "Attendance radius must be between 10 and 100 metres." });
   if (!Number.isFinite(s.accuracy) || s.accuracy > 120)
     { securityEvent(req.auth.sub, "gps.teacher_inaccurate", "warning", room.id, { accuracy: s.accuracy });
     return res
@@ -2065,6 +2138,17 @@ app.post("/api/attendance/check-in", auth, (req, res) => {
   )
     return res.status(403).json({ message: "Not enrolled in this classroom." });
   const accuracy = Number(req.body.accuracy);
+  const studentLat = Number(req.body.lat),
+    studentLng = Number(req.body.lng);
+  if (
+    !Number.isFinite(studentLat) ||
+    !Number.isFinite(studentLng) ||
+    studentLat < -90 ||
+    studentLat > 90 ||
+    studentLng < -180 ||
+    studentLng > 180
+  )
+    return res.status(400).json({ message: "Student coordinates are invalid." });
   if (!Number.isFinite(accuracy) || accuracy > 120)
     { securityEvent(req.auth.sub, "gps.student_inaccurate", "warning", s.classroom_id, { accuracy });
     return res
@@ -2074,7 +2158,7 @@ app.post("/api/attendance/check-in", auth, (req, res) => {
       }); }
   const d = distance(
     { lat: s.latitude, lng: s.longitude },
-    { lat: +req.body.lat, lng: +req.body.lng },
+    { lat: studentLat, lng: studentLng },
   );
   if (!Number.isFinite(d) || d > s.radius_meters)
     { securityEvent(req.auth.sub, "gps.outside_radius", d > s.radius_meters * 5 ? "critical" : "warning", s.classroom_id, { distance: d, radius: s.radius_meters, accuracy });
@@ -2957,6 +3041,15 @@ app.post("/api/classrooms/:id/schedules", auth, (req, res) => {
     endTime = String(req.body.endTime || "");
   if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6 || !/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime) || endTime <= startTime)
     return res.status(400).json({ message: "Choose a valid weekday and time range." });
+  const conflict = db
+    .prepare(
+      "SELECT 1 FROM class_schedules WHERE classroom_id=? AND weekday=? AND start_time<? AND end_time>?",
+    )
+    .get(req.params.id, weekday, endTime, startTime);
+  if (conflict)
+    return res.status(409).json({
+      message: "This classroom already has an overlapping schedule on that day.",
+    });
   const id = randomUUID();
   db.prepare("INSERT INTO class_schedules(id,classroom_id,weekday,start_time,end_time,room_number,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)").run(id, req.params.id, weekday, startTime, endTime, String(req.body.roomNumber || ""), req.auth.sub, now());
   audit(req, "schedule.created", "schedule", id, req.params.id, { weekday, startTime, endTime });

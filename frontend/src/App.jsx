@@ -810,14 +810,6 @@ function Auth({ enter }) {
               {register ? "Sign in" : "Create account"}
             </button>
           </p>
-          <div className="or">or preview immediately</div>
-          <button
-            type="button"
-            className="outline wide"
-            onClick={() => enter({ name: "Dr. Ananya Sen", role: "teacher" })}
-          >
-            Open teacher demo
-          </button>
         </form>
       </section>
     </div>
@@ -909,7 +901,7 @@ function Side({ page, setPage, user, logout, open, setOpen }) {
         <Mark />
         Classmark
       </b>
-      <button className="nav-x" onClick={() => setOpen(false)}>
+      <button className="nav-x" onClick={() => setOpen(false)} aria-label="Close navigation">
         <X />
       </button>
       <nav>
@@ -934,7 +926,7 @@ function Side({ page, setPage, user, logout, open, setOpen }) {
             <b>{user.name}</b>
             <small>{user.role}</small>
           </div>
-          <button onClick={logout}>
+          <button onClick={logout} aria-label="Sign out">
             <LogOut />
           </button>
         </div>
@@ -1182,13 +1174,56 @@ function AdminLoginVerification({ user, onVerified, onSignOut }) {
   );
 }
 
+function EnrollmentProfileCompletion({ user, onUpdated }) {
+  const [busy, setBusy] = useState(false),
+    [message, setMessage] = useState("");
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      const values = Object.fromEntries(new FormData(event.currentTarget)),
+        updated = await api("/profile", {
+          method: "PUT",
+          body: JSON.stringify(values),
+        });
+      onUpdated(updated);
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="panel">
+      <Title
+        over="IDENTITY DETAILS"
+        title="Complete your profile first"
+        text="These details identify you in classroom rosters and must be saved before biometric enrollment."
+      />
+      <form className="feature-form" onSubmit={save}>
+        <label>Full name<input name="name" defaultValue={user.name || ""} required /></label>
+        <label>Department<input name="department" defaultValue={user.department || ""} required /></label>
+        <label>{user.role === "teacher" ? "Faculty ID" : "Enrollment ID / roll number"}<input name="identifier" defaultValue={user.identifier || ""} required /></label>
+        <button className="primary" disabled={busy}>{busy ? "Saving…" : "Save and continue"}</button>
+      </form>
+      {message && <p className="status-message">{message}</p>}
+    </section>
+  );
+}
+
 function useProjectTooltips() {
   useEffect(() => {
     const apply = (root = document) => {
       root
         .querySelectorAll?.("button:not([title]), a:not([title]), select:not([title]), input:not([title]), textarea:not([title])")
         .forEach((element) => {
-          const label = element.getAttribute("aria-label") ||
+          const knownIconAction = element.matches(".x, .icon-close")
+              ? "Close dialog"
+              : element.matches(".nav-x")
+                ? "Close navigation"
+                : "",
+            label = element.getAttribute("aria-label") || knownIconAction ||
             element.closest("label")?.childNodes?.[0]?.textContent?.trim() ||
             element.textContent?.trim() ||
             element.getAttribute("placeholder");
@@ -1199,6 +1234,8 @@ function useProjectTooltips() {
               ? `Enter or update ${label.toLowerCase()}`
               : label;
           element.title = action.replace(/\s+/g, " ").slice(0, 160);
+          if (element.matches("button, a") && !element.getAttribute("aria-label"))
+            element.setAttribute("aria-label", action.replace(/\s+/g, " ").slice(0, 160));
         });
     };
     apply();
@@ -1917,11 +1954,15 @@ export default function App() {
               </p>
             </div>
           </div>
-          <FaceWorkspace
-            user={user}
-            Title={Title}
-            onEnrolled={() => api("/profile").then(setUser)}
-          />
+          {user.role !== "admin" && (!user.department || !user.identifier) ? (
+            <EnrollmentProfileCompletion user={user} onUpdated={setUser} />
+          ) : (
+            <FaceWorkspace
+              user={user}
+              Title={Title}
+              onEnrolled={() => api("/profile").then(setUser)}
+            />
+          )}
         </main>
       </div>
     );
@@ -1958,7 +1999,7 @@ export default function App() {
         {notice && (
           <div className="global-notice">
             {notice}
-            <button onClick={() => setNotice("")}>
+            <button onClick={() => setNotice("")} aria-label="Dismiss message">
               <X />
             </button>
           </div>

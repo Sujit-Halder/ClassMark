@@ -25,7 +25,6 @@ Attendance-System/
 │   │   └── index.js              Express application and API routes
 │   ├── data/                      Runtime data; ignored by Git
 │   ├── .env.example
-│   ├── .gitignore
 │   ├── eslint.config.js
 │   ├── package.json
 │   └── package-lock.json
@@ -36,13 +35,17 @@ Attendance-System/
 │   │   │   ├── auth/             Login, registration and recovery
 │   │   │   ├── classrooms/       Classes, people and assignments
 │   │   │   ├── faces/            Face enrollment and identification
+│   │   │   ├── admin/            System oversight and audit dashboard
+│   │   │   ├── notifications/    In-app notification center
+│   │   │   ├── people/           Cross-class teacher roster
+│   │   │   ├── reports/          Reports and correction workflow
+│   │   │   ├── schedule/         Recurring classroom timetable
 │   │   │   └── settings/         Profile, theme, font and security
 │   │   ├── lib/                  Shared browser utilities
 │   │   ├── styles/               Global and feature styles
 │   │   ├── App.jsx               Application shell
 │   │   └── main.jsx              React entry point
 │   ├── .env.example
-│   ├── .gitignore
 │   ├── eslint.config.js
 │   ├── index.html
 │   ├── package.json
@@ -70,7 +73,6 @@ Important backend values:
 PORT=4000
 JWT_SECRET=replace-with-a-long-random-value
 APP_URL=http://localhost:5173
-DATABASE_PATH=./data/classmark.sqlite
 
 SMTP_HOST=
 SMTP_PORT=587
@@ -131,6 +133,7 @@ Backend commands, run from `backend/`:
 npm run dev       # development server with automatic restart
 npm start         # production server
 npm run lint      # backend checks
+npm test          # policy and fresh-schema integrity tests
 ```
 
 Frontend commands, run from `frontend/`:
@@ -144,19 +147,154 @@ npm run lint      # frontend checks
 
 ## Data and security
 
-- SQLite is stored at `backend/data/classmark.sqlite` by default.
+- SQLite is always stored at `backend/data/classmark.sqlite`. Its EC2 path is
+  `/opt/classmark/backend/data/classmark.sqlite` when the repository is deployed
+  at `/opt/classmark`.
 - SQLite, WAL files, `.env`, build output and dependencies are ignored by Git.
 - Back up SQLite while the backend is stopped to ensure a consistent copy.
 - Do not commit JWT secrets, SMTP passwords, AWS credentials or biometric data.
 - The backend can serve the sibling `frontend/dist`, but Nginx static delivery is recommended in production.
+
+The production database path is intentionally not configurable, so starting
+Node from a different working directory cannot create a second database.
+`backend/src/data/` is obsolete and unsupported. SQLite WAL mode, foreign-key
+enforcement, strict tables, uniqueness constraints, and a five-second busy
+timeout are enabled at startup.
+
+## Roles and implemented behavior
+
+### Student
+
+- Registers with a unique enrollment/roll number, completes missing department
+  details, and must enroll a live face before portal APIs are unlocked.
+- Joins an unlocked classroom with its 10-character code or accepts an
+  email-bound student invitation.
+- Reads the stream, assignments, resources, roster, marks, timetable, and only
+  their own attendance history.
+- Submits assignments only before the deadline. A missing submission receives
+  zero when the deadline passes.
+- Completes attendance in the order QR → GPS proximity → AWS Face Liveness →
+  Rekognition identity match.
+- Can request immediate manual face review after QR/GPS succeeds, or later
+  dispute only an absent finalized record. Students cannot access teacher
+  reports or exports.
+
+### Teacher and co-teacher
+
+- Must complete profile details and live-face enrollment before classroom APIs
+  are unlocked.
+- Creates classrooms, announcements, assignments, resources, schedules,
+  invitations, and attendance sessions.
+- A co-teacher has teaching authority for content, grading, attendance, people,
+  and schedules. Only the owner can edit, lock, archive, restore, or permanently
+  delete the classroom.
+- Must pass a new AWS live-face authentication immediately before each QR
+  attendance session. Only one unexpired session may exist per classroom.
+- Reviews student submissions, manual attendance requests, finalized absence
+  corrections, and exports attendance reports as CSV or PDF.
+
+### Administrator
+
+- Is assigned through `ADMIN_EMAILS`; there is no default administrator
+  password. The account uses its normal password or passkey.
+- Must enroll a face and complete a fresh AWS live-face check after every new
+  login before privileged APIs are unlocked.
+- Sees system-wide users, classrooms, attendance reports, correction status,
+  security events, and audit history. Correction decisions remain with the
+  relevant classroom teachers.
+- Does not receive teacher/student classroom notifications.
+
+### Shared interface behavior
+
+- Global search finds only authorized classrooms, people, assignments, and
+  resources. `Ctrl/Command + K` focuses it; mobile has a dedicated search
+  control.
+- Buttons, links, form controls, and symbol-only controls receive accessible
+  labels and explanatory browser tooltips.
+- Theme and font settings are stored per account. Dates are rendered in the
+  browser/device timezone; the browser sends its validated IANA timezone for
+  overview calculations.
+- In-app notifications persist while unread. Read notifications are pruned by
+  age and per-user retention limits. Deleted or archived classroom links are
+  disabled instead of pointing to missing content.
+- Archive, permanent deletion, leaving a classroom, face deletion, assignment
+  deletion, and other destructive actions require confirmation in the UI.
+
+## Relational database schema
+
+Classmark uses one SQLite database. UUID text values are primary keys unless a
+table is explicitly keyed by its parent. ISO-8601 UTC strings are stored for
+timestamps and converted for display by the client.
+
+| Table | Purpose and important relationships |
+|---|---|
+| `users` | Accounts, BCrypt password hash, role, department, unique faculty/enrollment identifier, optional profile-picture BLOB, and profile state. |
+| `user_settings` | One-to-one with `users`; theme, font, and notification preferences. Deleted with the user. |
+| `classrooms` | Classroom name, subject, section, owner (`teacher_id`), unique 10-character code, color, lock state, archive time, and creation time. |
+| `memberships` | Student-to-classroom junction table with a unique `(classroom_id, user_id)` pair. |
+| `classroom_teachers` | Co-teacher-to-classroom junction table with a unique `(classroom_id, teacher_id)` pair. |
+| `invitations` | Email-bound, role-bound classroom invitation token, expiration, and acceptance time. |
+| `classroom_posts` | Stream entries linked to a classroom and author; `post_type` distinguishes announcements, assignments, and resources, while `reference_id` links generated stream activity. |
+| `classroom_resources` | Teacher-shared HTTP(S) resource metadata linked to a classroom and sharing user. |
+| `assignments` | Classroom assignment content, deadline, allocated points, creator, and creation time. |
+| `assignment_submissions` | One row per assignment/student, containing submission content, grade, feedback, and grading time. Missing expired work is represented relationally as a zero-grade row. |
+| `class_schedules` | Recurring classroom weekday, local start/end times, room, creator, and creation time. Overlapping entries for the same classroom are rejected by the API. |
+| `attendance_sessions` | Five-minute QR session, classroom, hosting teacher, room, teacher coordinates/accuracy, allowed radius, secret code, start/expiry, and finalization time. |
+| `attendance_records` | Unique session/student result with QR time, face time, method, GPS distance/accuracy, status, decision reason, and optional face-event reference. |
+| `attendance_review_requests` | Immediate manual-review workflow for a QR/GPS-approved student whose live face could not be completed; unique per session/student. |
+| `attendance_corrections` | Post-finalization absence dispute, requested status/reason, decision, resolving teacher, note, and timestamps. |
+| `notifications` | Per-user in-app notification type, title, message, optional navigation link, read time, and creation time. |
+| `face_profiles` | One verified biometric mapping per user: AWS provider, collection, provider user ID, JSON face-ID list, consent/enrollment/verification/revocation metadata. The image column remains an empty compatibility BLOB for AWS-vector profiles. |
+| `face_enrollment_sessions` | Short-lived AWS Face Liveness enrollment session and lifecycle status. |
+| `face_verification_sessions` | Short-lived teacher/student attendance liveness and identity-verification session. |
+| `face_auth_grants` | Single-use, expiring teacher authorization produced by face verification before QR generation. |
+| `admin_login_face_sessions` | Short-lived mandatory administrator login liveness/identity check. |
+| `password_reset_tokens` | SHA-256 token hash, owner, expiration, use time, and creation time. Plain reset tokens are never stored. |
+| `passkeys` | WebAuthn credential ID, public key, signature counter, transports, device metadata, and use timestamps. |
+| `webauthn_challenges` | Expiring registration/authentication challenges tied to a user and optional email. |
+| `audit_logs` | Actor, action, entity, optional classroom, JSON detail payload, IP address, and timestamp for accountable mutations. |
+| `security_events` | User/classroom security signals such as face failures and GPS anomalies with severity and JSON details. |
+
+Foreign keys use `CASCADE`, `SET NULL`, or `RESTRICT` according to ownership and
+audit requirements. Partial and composite unique indexes protect classroom
+codes, account identifiers, invitation tokens, memberships, submissions, and
+face mappings. Supporting indexes cover expiry, classroom lookups,
+notifications, schedules, audits, corrections, passkeys, and security events.
+
+Legacy `face_events` and obsolete `push_subscriptions` tables are removed
+automatically during startup. Neither table is part of the supported schema.
+
+## Storage boundaries: RDBMS and external state
+
+All authoritative Classmark application records listed above are stored in the
+SQLite relational database. No MongoDB, DynamoDB, Redis, Firebase, browser
+database, JSON-file database, or other application datastore is used.
+
+The following are deliberately outside SQLite and are not alternative
+application databases:
+
+- AWS Rekognition stores biometric face vectors in the configured collection
+  and processes Face Liveness sessions. SQLite stores the relational mapping,
+  consent, status, confidence-related audit data, and AWS identifiers—not a
+  reusable face photograph for an AWS profile.
+- The browser stores the signed JWT and temporary interface preferences in Web
+  Storage. This is session/client state, not authoritative institutional data.
+- Cognito Identity Pools issue temporary browser credentials for Face
+  Liveness; they are not a Classmark datastore.
+- SMTP transports invitations, reset links, and summaries. Email providers
+  naturally retain delivered mail outside Classmark.
+- Nginx serves compiled static assets, while systemd/journald retains process
+  logs. Neither is used as an application database.
+- The described S3 backup is optional disaster-recovery object storage for an
+  encrypted SQLite snapshot, not a live source of application records.
 
 ## Identity and attendance workflow
 
 1. Every new teacher and student signs in and completes AWS live-face enrollment before the rest of the portal is activated.
 2. An enrolled teacher must authenticate against their saved face immediately before generating each attendance QR code. The authorization is valid for five minutes and can create only one session.
 3. A student scans the live QR code and passes classroom proximity verification.
-4. The student then captures a front-camera image that must match their own enrolled Rekognition identity.
-5. Attendance is complete only after QR, location, and face verification all pass. QR/location without face is retained as a partial record, not present attendance.
+4. The student completes an AWS Face Liveness movement challenge. The returned live reference image must match their own enrolled Rekognition identity at the configured threshold.
+5. Attendance is complete only after QR, location, liveness, and face identity verification all pass. QR/location without live-face verification is retained as a partial absent record, not present attendance.
 6. If face authentication cannot be completed, the student can request manual verification. Classroom teachers receive an in-app notification and can approve or reject the request in the attendance page.
 7. In-app notifications have no unread-count limit. Unread items remain until viewed; read items are retained for 90 days with at most 200 recent read notifications per user by default. Both limits are configurable in `backend/.env`.
 

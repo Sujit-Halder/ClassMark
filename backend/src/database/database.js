@@ -1,10 +1,12 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const backendRoot = dirname(dirname(fileURLToPath(import.meta.url)))
-const databasePath = process.env.DATABASE_PATH || join(backendRoot, 'data', 'classmark.sqlite')
+const backendRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
+const databasePath = process.env.NODE_ENV === 'test' && process.env.CLASSMARK_TEST_DATABASE_PATH
+  ? resolve(process.env.CLASSMARK_TEST_DATABASE_PATH)
+  : join(backendRoot, 'data', 'classmark.sqlite')
 mkdirSync(dirname(databasePath), { recursive: true })
 
 export const db = new DatabaseSync(databasePath)
@@ -110,6 +112,7 @@ if (!classroomColumns.includes('archived_at')) db.exec('ALTER TABLE classrooms A
 if (!classroomColumns.includes('is_locked')) db.exec('ALTER TABLE classrooms ADD COLUMN is_locked INTEGER NOT NULL DEFAULT 0')
 db.exec(`UPDATE classrooms SET class_code=upper(substr(hex(randomblob(8)),1,10)) WHERE class_code IS NULL; CREATE UNIQUE INDEX IF NOT EXISTS idx_classrooms_code ON classrooms(class_code);`)
 db.exec('DROP TABLE IF EXISTS push_subscriptions;')
+db.exec('DROP TABLE IF EXISTS face_events;')
 
 const invitationColumns = db.prepare('PRAGMA table_info(invitations)').all().map((column) => column.name)
 if (!invitationColumns.includes('invitee_role')) db.exec("ALTER TABLE invitations ADD COLUMN invitee_role TEXT NOT NULL DEFAULT 'student'")
