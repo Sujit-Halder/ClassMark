@@ -135,10 +135,18 @@ export default function ReportsWorkspace({ user }) {
         ))}
       </section>
       <section className="panel corrections">
-        <h2>{student ? "My review requests" : "Student correction requests"}</h2>
+        <h2>{student ? "My review requests" : user.role === "admin" ? "All student correction requests" : "Student correction requests"}</h2>
         {corrections.length ? corrections.map((item) => (
           <article key={item.id}>
-            <div><b>{item.studentName || item.classroomName}</b><small>{item.classroomName} · absent → present</small><p>{item.reason}</p></div>
+            <div>
+              <b>{item.studentName || "Student"} · {item.identifier || "No roll number"}</b>
+              <small>{item.classroomName} · {item.subject} · {new Date(item.recordedAt).toLocaleString()}</small>
+              <small>Room {item.roomNumber || "not set"} · Verification: {item.method || "none recorded"}{item.distanceMeters != null ? ` · ${Math.round(item.distanceMeters)} m from teacher` : ""}{item.locationAccuracy != null ? ` · GPS ±${Math.round(item.locationAccuracy)} m` : ""}</small>
+              <small>Requested change: absent → present</small>
+              <small>Request submitted: {new Date(item.requested_at).toLocaleString()}</small>
+              {item.resolved_at && <small>Resolved: {new Date(item.resolved_at).toLocaleString()} by {item.resolvedByName || "classroom teacher"}{item.resolution_note ? ` · ${item.resolution_note}` : ""}</small>}
+              <p>{item.reason}</p>
+            </div>
             <em className={item.status}>{item.status}</em>
             {user.role === "teacher" && item.status === "pending" && <><button className="outline" onClick={() => decide(item.id, "rejected")}><X />Reject</button><button className="primary" onClick={() => decide(item.id, "approved")}><Check />Approve</button></>}
           </article>

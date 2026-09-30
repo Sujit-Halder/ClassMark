@@ -2959,9 +2959,12 @@ app.post("/api/attendance/:recordId/corrections", auth, (req, res) => {
   res.status(201).json({ ok: true, message: "Correction request sent to the classroom teachers." });
 });
 app.get("/api/attendance/corrections", auth, (req, res) => {
-  const rows = req.auth.role === "student"
-    ? db.prepare(`SELECT cr.*,a.status currentStatus,c.name classroomName,s.room_number roomNumber FROM attendance_corrections cr JOIN attendance_records a ON a.id=cr.record_id JOIN classrooms c ON c.id=a.classroom_id JOIN attendance_sessions s ON s.id=a.session_id WHERE cr.requested_by=? ORDER BY cr.requested_at DESC`).all(req.auth.sub)
-    : db.prepare(`SELECT cr.*,a.status currentStatus,a.classroom_id classroomId,c.name classroomName,u.name studentName,u.identifier FROM attendance_corrections cr JOIN attendance_records a ON a.id=cr.record_id JOIN classrooms c ON c.id=a.classroom_id JOIN users u ON u.id=a.user_id LEFT JOIN classroom_teachers ct ON ct.classroom_id=c.id WHERE (c.teacher_id=? OR ct.teacher_id=?) GROUP BY cr.id ORDER BY cr.requested_at DESC`).all(req.auth.sub, req.auth.sub);
+  const detailSelect = `SELECT cr.*,a.status currentStatus,a.recorded_at recordedAt,a.method,a.distance_meters distanceMeters,a.location_accuracy_meters locationAccuracy,a.decision_reason decisionReason,a.classroom_id classroomId,c.name classroomName,c.subject,u.name studentName,u.identifier,s.room_number roomNumber,resolver.name resolvedByName FROM attendance_corrections cr JOIN attendance_records a ON a.id=cr.record_id JOIN classrooms c ON c.id=a.classroom_id JOIN users u ON u.id=a.user_id JOIN attendance_sessions s ON s.id=a.session_id LEFT JOIN users resolver ON resolver.id=cr.resolved_by`,
+    rows = req.auth.role === "student"
+      ? db.prepare(`${detailSelect} WHERE cr.requested_by=? ORDER BY cr.requested_at DESC`).all(req.auth.sub)
+      : req.auth.role === "admin"
+        ? db.prepare(`${detailSelect} ORDER BY cr.requested_at DESC`).all()
+        : db.prepare(`${detailSelect} LEFT JOIN classroom_teachers ct ON ct.classroom_id=c.id WHERE (c.teacher_id=? OR ct.teacher_id=?) GROUP BY cr.id ORDER BY cr.requested_at DESC`).all(req.auth.sub, req.auth.sub);
   res.json(rows);
 });
 app.patch("/api/attendance/corrections/:id", auth, (req, res) => {
