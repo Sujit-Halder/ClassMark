@@ -1165,7 +1165,7 @@ app.get("/api/overview", auth, (req, res) => {
     ).length,
     classesToday = db
       .prepare(
-        `SELECT COUNT(*) count FROM class_schedules cs JOIN classrooms c ON c.id=cs.classroom_id WHERE ${access} AND cs.weekday=?`,
+        `SELECT COUNT(*) count FROM class_schedules cs JOIN classrooms c ON c.id=cs.classroom_id WHERE ${access} AND c.archived_at IS NULL AND cs.weekday=?`,
       )
       .get(...params, deviceClock.weekday).count;
   res.json({

@@ -574,6 +574,7 @@ function RealHome({ setPage, modal, user }) {
       overviewQuery = new URLSearchParams({
         timezone: timeZone,
         offsetMinutes: String(offsetMinutes),
+        refreshedAt: String(Date.now()),
       });
     Promise.all([
       api("/classrooms"),
