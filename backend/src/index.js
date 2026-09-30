@@ -101,6 +101,8 @@ const administratorEmails = String(process.env.ADMIN_EMAILS || "")
   .split(",")
   .map((email) => email.trim().toLowerCase())
   .filter(Boolean);
+const isAdministratorEmail = (email) =>
+  administratorEmails.includes(String(email || "").trim().toLowerCase());
 for (const email of administratorEmails)
   db.prepare("UPDATE users SET role='admin' WHERE lower(email)=?").run(email);
 const hasVerifiedFace = (userId) =>
@@ -629,14 +631,15 @@ app.post("/api/auth/register", async (req, res) => {
       identifier = "",
     } = req.body;
     const normalizedEmail = String(email || "").trim().toLowerCase(),
-      normalizedName = String(name || "").trim();
+      normalizedName = String(name || "").trim(),
+      effectiveRole = isAdministratorEmail(normalizedEmail) ? "admin" : role;
     if (!normalizedName || !normalizedEmail || !password || !["student", "teacher"].includes(role))
       return res
         .status(400)
         .json({ message: "Name, email, password and role are required." });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail))
       return res.status(400).json({ message: "Enter a valid email address." });
-    if (role === "student" && !String(identifier).trim())
+    if (effectiveRole === "student" && !String(identifier).trim())
       return res
         .status(400)
         .json({
@@ -670,10 +673,12 @@ app.post("/api/auth/register", async (req, res) => {
         normalizedName,
         normalizedEmail,
         bcrypt.hashSync(password, 12),
-        role,
+        effectiveRole,
         String(department).trim(),
         String(identifier).trim(),
-        role === "student" ? Number(Boolean(department && identifier)) : 0,
+        effectiveRole === "student"
+          ? Number(Boolean(department && identifier))
+          : 0,
         created,
       );
       db.prepare(
@@ -700,11 +705,15 @@ app.post("/api/auth/register", async (req, res) => {
   }
 });
 app.post("/api/auth/login", async (req, res) => {
-  const u = db
+  let u = db
     .prepare("SELECT * FROM users WHERE email=?")
     .get(String(req.body.email || "").trim().toLowerCase());
   if (!u || !bcrypt.compareSync(req.body.password || "", u.password_hash))
     return res.status(401).json({ message: "Invalid email or password." });
+  if (isAdministratorEmail(u.email) && u.role !== "admin") {
+    db.prepare("UPDATE users SET role='admin' WHERE id=?").run(u.id);
+    u = db.prepare("SELECT * FROM users WHERE id=?").get(u.id);
+  }
   res.json({
     token: tokenFor(u),
     user: {
