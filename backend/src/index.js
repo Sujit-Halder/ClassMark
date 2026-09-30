@@ -2900,8 +2900,13 @@ function attendanceReportRows(user, query) {
   }
   return db.prepare(`SELECT a.id,a.recorded_at recordedAt,a.status,a.method,a.distance_meters distanceMeters,a.location_accuracy_meters locationAccuracy,u.name studentName,u.identifier,c.name classroomName,c.subject,s.room_number roomNumber FROM attendance_records a JOIN users u ON u.id=a.user_id JOIN classrooms c ON c.id=a.classroom_id JOIN attendance_sessions s ON s.id=a.session_id WHERE ${conditions.length ? conditions.join(" AND ") : "1=1"} ORDER BY a.recorded_at DESC`).all(...params);
 }
-app.get("/api/reports/attendance", auth, (req, res) => res.json(attendanceReportRows(req.auth, req.query)));
-app.get("/api/reports/attendance.csv", auth, (req, res) => {
+function reportsOnly(req, res, next) {
+  if (req.auth.role !== "teacher" && req.auth.role !== "admin")
+    return res.status(403).json({ message: "Attendance reports are available to teachers and administrators only." });
+  next();
+}
+app.get("/api/reports/attendance", auth, reportsOnly, (req, res) => res.json(attendanceReportRows(req.auth, req.query)));
+app.get("/api/reports/attendance.csv", auth, reportsOnly, (req, res) => {
   const rows = attendanceReportRows(req.auth, req.query),
     columns = [["Date","recordedAt"],["Classroom","classroomName"],["Subject","subject"],["Student","studentName"],["Student ID","identifier"],["Status","status"],["Method","method"],["Distance (m)","distanceMeters"],["GPS accuracy (m)","locationAccuracy"],["Room","roomNumber"]],
     quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
@@ -2910,7 +2915,7 @@ app.get("/api/reports/attendance.csv", auth, (req, res) => {
   res.setHeader("Content-Disposition", "attachment; filename=classmark-attendance.csv");
   res.send(`\uFEFF${csv}`);
 });
-app.get("/api/reports/attendance.pdf", auth, (req, res) => {
+app.get("/api/reports/attendance.pdf", auth, reportsOnly, (req, res) => {
   const rows = attendanceReportRows(req.auth, req.query), doc = new PDFDocument({ margin: 42, size: "A4" });
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", "attachment; filename=classmark-attendance.pdf");
@@ -2927,13 +2932,26 @@ app.get("/api/reports/attendance.pdf", auth, (req, res) => {
   doc.end();
 });
 
+app.get("/api/attendance/mine", auth, (req, res) => {
+  if (req.auth.role !== "student")
+    return res.status(403).json({ message: "Student access is required." });
+  res.json(attendanceReportRows(req.auth, req.query));
+});
+
 app.post("/api/attendance/:recordId/corrections", auth, (req, res) => {
+  if (req.auth.role !== "student")
+    return res.status(403).json({ message: "Only students can request an attendance correction." });
   const record = db.prepare("SELECT * FROM attendance_records WHERE id=?").get(req.params.recordId);
-  if (!record || (req.auth.role === "student" && record.user_id !== req.auth.sub) || !classroomAccess(record.classroom_id, req.auth.sub))
+  if (!record || record.user_id !== req.auth.sub || !classroomAccess(record.classroom_id, req.auth.sub))
     return res.status(404).json({ message: "Attendance record not found." });
-  const requestedStatus = req.body.requestedStatus, reason = String(req.body.reason || "").trim();
-  if (!["present","absent"].includes(requestedStatus) || requestedStatus === record.status || reason.length < 10)
-    return res.status(400).json({ message: "Choose a different status and provide a clear reason of at least 10 characters." });
+  if (record.status !== "absent")
+    return res.status(409).json({ message: "Only an absent attendance result can be disputed." });
+  const requestedStatus = "present", reason = String(req.body.reason || "").trim();
+  if (reason.length < 10)
+    return res.status(400).json({ message: "Provide a clear reason of at least 10 characters." });
+  const pending = db.prepare("SELECT 1 FROM attendance_corrections WHERE record_id=? AND status='pending'").get(record.id);
+  if (pending)
+    return res.status(409).json({ message: "A correction request for this absence is already pending." });
   const id = randomUUID();
   db.prepare("INSERT INTO attendance_corrections(id,record_id,requested_by,requested_status,reason,requested_at) VALUES(?,?,?,?,?,?)").run(id, record.id, req.auth.sub, requestedStatus, reason, now());
   for (const teacherId of classroomTeacherIds(record.classroom_id)) void notifyUser(teacherId, "attendance", "Attendance correction requested", reason, `/?page=reports`, true);

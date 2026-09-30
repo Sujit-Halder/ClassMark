@@ -897,7 +897,7 @@ function Side({ page, setPage, user, logout, open, setOpen }) {
           ["attendance", QrCode, "QR check-in"],
           ["face", ScanFace, "Face setup"],
           ["schedule", CalendarDays, "Schedule"],
-          ["reports", BarChart3, "Reports"],
+          ["reports", BarChart3, "My attendance"],
           ["settings", Settings, "Settings"],
         ];
   return (
@@ -1761,7 +1761,7 @@ export default function App() {
     face: "Face recognition",
     people: "People",
     schedule: "Schedule",
-    reports: "Reports",
+    reports: user?.role === "student" ? "My attendance" : "Reports",
     admin: "Administration",
     settings: "Settings",
   };
