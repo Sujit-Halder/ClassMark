@@ -38,6 +38,7 @@ export async function getReliableLocation({
       finished = true;
       navigator.geolocation.clearWatch(watchId);
       clearTimeout(timer);
+      document.removeEventListener("visibilitychange", visibilityChanged);
       if (best && best.accuracy <= maximumAccuracy) resolve(best);
       else
         reject(
@@ -63,6 +64,15 @@ export async function getReliableLocation({
       (error) => finish(locationError(error)),
       { enableHighAccuracy: true, maximumAge: 0, timeout },
     );
+    const visibilityChanged = () => {
+      if (document.hidden)
+        finish(
+          new Error(
+            "Location verification was cancelled because you left this tab. Return here and start the check again.",
+          ),
+        );
+    };
+    document.addEventListener("visibilitychange", visibilityChanged);
     const timer = setTimeout(() => finish(), timeout);
   });
 }

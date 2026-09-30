@@ -8,6 +8,7 @@ import {
   Trash2,
 } from "lucide-react";
 import "../../styles/face-workspace.css";
+import "../../styles/critical-process.css";
 
 const API = import.meta.env.VITE_API_URL || "/api";
 async function api(path, options = {}) {
@@ -56,6 +57,17 @@ export function LivenessCheck({
       mounted = false;
     };
   }, [enrollment.identityPoolId]);
+  useEffect(() => {
+    const stopWhenHidden = () => {
+      if (document.hidden)
+        onCancel?.(
+          "The live face check was cancelled because you left this tab. Start a new check and keep it visible until completion.",
+        );
+    };
+    document.addEventListener("visibilitychange", stopWhenHidden);
+    return () =>
+      document.removeEventListener("visibilitychange", stopWhenHidden);
+  }, [onCancel]);
   function detectorError(event) {
     const detail = event?.error?.message || event?.message || event?.name;
     if (/permission|camera/i.test(detail || ""))
@@ -73,46 +85,53 @@ export function LivenessCheck({
       );
   }
   return (
-    <section className="panel liveness-panel">
-      <div className="biometric-heading">
-        <div>
-          <small>{over}</small>
-          <h2>{title}</h2>
-          <p>{text}</p>
+    <div
+      className="critical-process-layer"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Secure live face verification"
+    >
+      <section className="panel liveness-panel">
+        <div className="biometric-heading">
+          <div>
+            <small>{over}</small>
+            <h2>{title}</h2>
+            <p>{text}</p>
+          </div>
+          <button className="outline" onClick={onCancel}>
+            Cancel
+          </button>
         </div>
-        <button className="outline" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-      <div className="liveness-tips">
-        <span>
-          <Check />
-          Use soft, even light
-        </span>
-        <span>
-          <Check />
-          Remove face obstructions
-        </span>
-        <span>
-          <Check />
-          Hold the phone at eye level
-        </span>
-      </div>
-      {error && <p className="error">{error}</p>}
-      {Detector ? (
-        <Detector
-          sessionId={enrollment.sessionId}
-          region={enrollment.region}
-          onAnalysisComplete={onComplete}
-          onError={detectorError}
-        />
-      ) : (
-        <div className="liveness-loading">
-          <RefreshCw />
-          <p>Loading secure AWS liveness check…</p>
+        <div className="liveness-tips">
+          <span>
+            <Check />
+            Use soft, even light
+          </span>
+          <span>
+            <Check />
+            Remove face obstructions
+          </span>
+          <span>
+            <Check />
+            Hold the phone at eye level
+          </span>
         </div>
-      )}
-    </section>
+        {error && <p className="error">{error}</p>}
+        {Detector ? (
+          <Detector
+            sessionId={enrollment.sessionId}
+            region={enrollment.region}
+            onAnalysisComplete={onComplete}
+            onError={detectorError}
+          />
+        ) : (
+          <div className="liveness-loading">
+            <RefreshCw />
+            <p>Loading secure AWS liveness check…</p>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -203,7 +222,10 @@ export default function FaceWorkspace({ user, Title, onEnrolled }) {
         <LivenessCheck
           enrollment={enrollment}
           onComplete={complete}
-          onCancel={() => setEnrollment(null)}
+          onCancel={(reason) => {
+            setEnrollment(null);
+            if (reason) setMessage(reason);
+          }}
         />
         {message && <p className="status-message">{message}</p>}
       </>

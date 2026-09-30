@@ -1,0 +1,147 @@
+.critical-process-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: rgba(12, 22, 19, 0.82);
+  backdrop-filter: blur(12px);
+}
+.critical-process-layer .liveness-panel {
+  width: min(900px, 100%);
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.38);
+}
+.process-lock {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  padding: 24px;
+  text-align: center;
+  color: #fff;
+  background: rgba(13, 24, 20, 0.88);
+  backdrop-filter: blur(12px);
+  overscroll-behavior: contain;
+}
+.process-lock > span {
+  width: 68px;
+  height: 68px;
+  display: grid;
+  place-items: center;
+  border-radius: 20px;
+  color: #b8f0d5;
+  background: rgba(255, 255, 255, 0.12);
+}
+.process-lock > span svg {
+  width: 34px;
+  height: 34px;
+  animation: process-pulse 1.3s ease-in-out infinite;
+}
+.process-lock h2 {
+  margin: 18px 0 6px;
+  font-size: 25px;
+}
+.process-lock p {
+  max-width: 520px;
+  margin: 0;
+  color: #d7e5df;
+  line-height: 1.5;
+}
+.process-lock small {
+  margin-top: 13px;
+  color: #9fb5ac;
+}
+.liveness-requirement {
+  padding: 12px 14px;
+  border-radius: 10px;
+  color: #85571f;
+  background: #fff6e8;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.live-auth-start .primary {
+  margin-top: 16px;
+}
+@keyframes process-pulse {
+  50% {
+    transform: scale(1.12);
+    opacity: 0.65;
+  }
+}
+
+@media (max-width: 700px) {
+  .critical-process-layer {
+    padding: 0;
+    place-items: stretch;
+    background: var(--surface, #fff);
+  }
+  .critical-process-layer .liveness-panel {
+    width: 100%;
+    min-height: 100dvh;
+    max-height: none;
+    padding: 18px 14px;
+    border: 0;
+    border-radius: 0;
+  }
+  .critical-process-layer .biometric-heading {
+    gap: 10px;
+  }
+  .critical-process-layer .biometric-heading h2 {
+    font-size: 20px;
+  }
+  .critical-process-layer .liveness-tips {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .secure-title h1 {
+    font-size: 25px;
+  }
+  .secure-heading h2 {
+    font-size: 20px;
+  }
+  .secure-heading > span {
+    width: 40px;
+    height: 40px;
+    flex: none;
+  }
+  .session,
+  .qr,
+  .student-checkin,
+  .review-queue {
+    padding: 17px;
+  }
+  .qr {
+    min-height: 390px;
+  }
+  .qr img {
+    width: min(250px, 82vw);
+  }
+  .process-lock {
+    padding: 20px;
+  }
+  .process-lock h2 {
+    font-size: 22px;
+  }
+  .manual-review-action > button {
+    width: 100%;
+  }
+}
+@media (min-width: 701px) and (max-width: 1100px) {
+  .secure-attendance {
+    max-width: 900px;
+    margin: auto;
+  }
+  .attend {
+    grid-template-columns: 1fr 1fr;
+  }
+  .qr {
+    min-height: 470px;
+  }
+}

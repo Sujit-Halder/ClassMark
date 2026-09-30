@@ -14,6 +14,7 @@ import QrCameraScanner from "./QrCameraScanner.jsx";
 import { LivenessCheck } from "../faces/FaceWorkspace.jsx";
 import { getReliableLocation } from "../../lib/location.js";
 import "../../styles/secure-attendance.css";
+import "../../styles/critical-process.css";
 
 const API = import.meta.env.VITE_API_URL || "/api";
 async function api(path, options = {}) {
@@ -27,6 +28,22 @@ async function api(path, options = {}) {
     data = await response.json().catch(() => ({}));
   if (!response.ok) throw Error(data.message || "Request failed.");
   return data;
+}
+
+function ProcessLock({ active, message }) {
+  if (!active) return null;
+  return (
+    <div className="process-lock" role="alert" aria-live="assertive">
+      <span>
+        <ScanFace />
+      </span>
+      <h2>Please stay on this page</h2>
+      <p>{message}</p>
+      <small>
+        Navigation is temporarily locked while this secure check completes.
+      </small>
+    </div>
+  );
 }
 
 // Kept temporarily as a migration fallback; the server rejects this legacy flow.
@@ -204,7 +221,10 @@ function LiveFaceAuthentication({
       <LivenessCheck
         enrollment={liveness}
         onComplete={complete}
-        onCancel={() => setLiveness(null)}
+        onCancel={(reason) => {
+          setLiveness(null);
+          if (reason) setMessage(reason);
+        }}
         over="LIVE IDENTITY CHECK"
         title={title}
         text={text}
@@ -213,12 +233,22 @@ function LiveFaceAuthentication({
   return (
     <section className="panel self-face live-auth-start">
       <div className="secure-heading">
-        <span><ShieldCheck /></span>
-        <div><small>ANTI-SPOOF FACE AUTHENTICATION</small><h2>{title}</h2><p>{text}</p></div>
+        <span>
+          <ShieldCheck />
+        </span>
+        <div>
+          <small>ANTI-SPOOF FACE AUTHENTICATION</small>
+          <h2>{title}</h2>
+          <p>{text}</p>
+        </div>
       </div>
-      <p className="liveness-requirement">A still photo, screen image, object, partial face, or obscured face will not be accepted.</p>
+      <p className="liveness-requirement">
+        A still photo, screen image, object, partial face, or obscured face will
+        not be accepted.
+      </p>
       <button className="primary wide" onClick={begin} disabled={busy}>
-        <ScanFace />{busy ? "Starting…" : "Start live face check"}
+        <ScanFace />
+        {busy ? "Starting…" : "Start live face check"}
       </button>
       {message && <p className="status-message">{message}</p>}
     </section>
@@ -323,6 +353,10 @@ function TeacherAttendance() {
     );
   return (
     <>
+      <ProcessLock
+        active={busy}
+        message="Verifying the teacher’s current location and creating the protected attendance session…"
+      />
       <div className="secure-title">
         <small>LOCATION-VERIFIED</small>
         <h1>Take attendance</h1>
@@ -553,6 +587,10 @@ function StudentAttendance() {
     );
   return (
     <>
+      <ProcessLock
+        active={busy}
+        message="Verifying the QR code and your current classroom proximity…"
+      />
       <div className="secure-title">
         <small>STEP 1 OF 2</small>
         <h1>Scan attendance QR</h1>
